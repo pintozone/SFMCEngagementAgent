@@ -84,3 +84,8 @@ def test_generator_is_deterministic_and_safe():
     assert len({c["EmailAddress"] for c in custs}) == len(custs)
     vins = {v["VIN"] for v in a["CK_Master_Vehicles"]}
     assert all(len(v) == 17 for v in vins)
+
+
+def test_journey_description_is_sanitized():
+    p = journey_payload("K", "N", "Owner's update & <stuff> / \"x\"", EntrySpec("data_extension", "DE", "EV", "EV"), "e", [], None)
+    assert p["description"] == "Owners update  stuff  x"

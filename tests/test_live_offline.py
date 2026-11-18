@@ -76,3 +76,12 @@ def test_live_de_create_and_upsert(monkeypatch):
     assert [len(b[2]) for b in batches] == [500, 500, 203]
     assert batches[0][1] == "https://sub.rest.marketingcloudapis.com/hub/v1/dataevents/key:CK_T_DE/rowset"
     assert batches[0][2][0]["values"]["Opt"] == "true"
+
+
+def test_preview_row_identification():
+    rows = [{"SubscriberKey": "PROOF-X-001", "FirstName": "Proof 001", "EmailAddress": "qa@example.com"},
+            {"SubscriberKey": "PROOF-X-002", "FirstName": "Proof 002", "EmailAddress": "qa@example.com"}]
+    cols = LiveBackend._identity_cols(rows)
+    assert "FirstName" in cols and "EmailAddress" not in cols      # shared inbox can't identify a row
+    assert LiveBackend._identify("<p>Hi Proof 002, …</p>", rows, cols) == 1
+    assert LiveBackend._identify("<p>Hi there</p>", rows, cols) is None

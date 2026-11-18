@@ -119,9 +119,10 @@ def check_brief(path: str | Path, db_path: Path | None = None) -> CheckResult:
         if not e.preheader:
             res.warnings.append(f"{ctx}: no preheader")
 
-        copy = " ".join([e.subject, e.preheader, *e.blocks.values()])
+        copy = " ".join([e.subject, e.preheader, *(v for k, v in e.blocks.items() if k != "sections")])
         for var in re.findall(r"%%=\s*v\(\s*@(\w+)\s*\)\s*=%%", copy, re.I):
-            if var.lower() not in {v.lower() for v in info.variables}:
+            if var.lower() not in {v.lower() for v in info.variables} and \
+                    not (e.sections and var.lower() in de_fields):   # sections SET every audience field
                 res.errors.append(f"{ctx}: uses @{var}, but {e.template} only sets "
                                   f"{['@' + v for v in info.variables]}")
         for s in re.findall(r"%%(\w+)%%", copy):

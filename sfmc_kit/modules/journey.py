@@ -1,6 +1,7 @@
 """Journey Builder JSON construction (entry event + EMAILV2 / WAIT / ENGAGEMENTDECISION activities)."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -143,6 +144,8 @@ def journey_payload(key: str, name: str, description: str, entry: EntrySpec, eve
         a = {**a, "metaData": {k: v for k, v in a["metaData"].items() if k == "isConfigured"},
              "outcomes": [{k: v for k, v in o.items() if not (k == "next" and v is None)} for o in a["outcomes"]]}
         clean.append(a)
+    # Journey Builder rejects & < > " ' / in descriptions (error 121072).
+    description = re.sub(r"[&<>\"'/]", "", " ".join(str(description or "").split()))[:500]
     return {
         "key": key, "name": name, "description": description, "workflowApiVersion": 1.0,
         "entryMode": entry.entry_mode,

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!-- cloudpage: Proofing setup form. One page for every email: ?email=<EmailKey> shows that email's visibility-condition
+     fields with candidate values (from the values DE), lets the developer tick/add values, enter proof inboxes, pick a
+     coverage strategy and submit. Without ?email it lists emails prepared by the kit. -->
+%%[
+VAR @email, @emailQ, @settings, @srow, @label, @inboxes, @strategy, @maxrows, @status, @blocks, @fields, @rowsGen
+VAR @submitted, @errors, @done, @rows, @i, @row, @sort, @sel, @fset, @k, @fname, @add, @addset, @j, @newval, @n
+VAR @inb, @inbset, @addr, @valid, @clean, @list, @fidx, @prev, @val, @valH, @src, @checked, @labelH, @inboxesH, @blocksH, @fnameH
+
+SET @emailQ = RequestParameter("email")
+SET @email = ""
+SET @submitted = RequestParameter("pf_submit")
+SET @errors = ""
+SET @done = "false"
+
+IF NOT Empty(@emailQ) THEN
+  SET @settings = LookupRows("{{ settings_de }}", "EmailKey", @emailQ)
+  IF RowCount(@settings) > 0 THEN
+    SET @email = @emailQ
+    SET @srow = Row(@settings, 1)
+    SET @label = Field(@srow, "Label")
+    SET @inboxes = Field(@srow, "Inboxes")
+    SET @strategy = Field(@srow, "Strategy")
+    SET @maxrows = Field(@srow, "MaxRows")
+    SET @status = Field(@srow, "Status")
+    SET @blocks = Field(@srow, "Blocks")
+    SET @fields = Field(@srow, "Fields")
+    SET @rowsGen = Field(@srow, "Rows")
+  ELSE
+    SET @errors = "<li>That email isn't set up for proofing yet. Ask the agent to run proof setup for it.</li>"
+  ENDIF
+ENDIF
+
+IF NOT Empty(@email) AND @submitted == "1" THEN
+  SET @inboxes = Trim(RequestParameter("Inboxes"))
+  SET @strategy = RequestParameter("Strategy")
+  SET @maxrows = Trim(RequestParameter("MaxRows"))
+  IF IndexOf("|smart|full|per_block|", Concat("|", @strategy, "|")) == 0 THEN
+    SET @errors = Concat(@errors, "<li>Choose a coverage strategy.</li>")
+  ENDIF
+  IF Empty(RegExMatch(@maxrows, "^\d{1,3}$", 0)) THEN
+    SET @errors = Concat(@errors, "<li>Max rows must be a number from 1 to 500.</li>")
+  ELSEIF @maxrows < 1 OR @maxrows > 500 THEN
+    SET @errors = Concat(@errors, "<li>Max rows must be a number from 1 to 500.</li>")
+  ENDIF
+  SET @inb = Replace(Replace(Replace(@inboxes, Char(13), ""), Char(10), ","), ";", ",")
+  SET @inbset = BuildRowSetFromString(@inb, ",")
+  SET @valid = 0
+  SET @clean = ""
+  FOR @j = 1 TO RowCount(@inbset) DO
+    SET @addr = Trim(Field(Row(@inbset, @j), 1))
+    IF NOT Empty(@addr) THEN
+      IF NOT IsEmailAddress(@addr) THEN
+        SET @errors = Concat(@errors, "<li>Not a valid inbox: ", Replace(Replace(@addr, "<", "&lt;"), ">", "&gt;"), "</li>")
+      ELSE
+        SET @valid = Add(@valid, 1)
+        SET @clean = IIF(Empty(@clean), @addr, Concat(@clean, ",", @addr))
+      ENDIF
+    ENDIF
+  NEXT @j
+  IF @valid == 0 THEN SET @errors = Concat(@errors, "<li>Enter at least one proof inbox.</li>") ENDIF
+
+  IF Empty(@errors) THEN
+    SET @rows = LookupOrderedRows("{{ values_de }}", 0, "FieldIdx ASC, Sort ASC", "EmailKey", @email)
+    FOR @i = 1 TO RowCount(@rows) DO
+      SET @row = Row(@rows, @i)
+      SET @sort = Field(@row, "Sort")
+      SET @sel = IIF(RequestParameter(Concat("sel_", @sort)) == "1", "true", "false")
+      UpsertData("{{ values_de }}", 3, "EmailKey", @email, "Field", Field(@row, "Field"), "Value", Field(@row, "Value"), "Selected", @sel)
+    NEXT @i
+    SET @fset = BuildRowSetFromString(@fields, "|")
+    FOR @k = 1 TO RowCount(@fset) DO
+      SET @fname = Field(Row(@fset, @k), 1)
+      SET @add = RequestParameter(Concat("add_", @k))
+      IF NOT Empty(@add) THEN
+        SET @addset = BuildRowSetFromString(@add, ",")
+        FOR @n = 1 TO RowCount(@addset) DO
+          SET @newval = Substring(Trim(Field(Row(@addset, @n), 1)), 1, 100)
+          IF NOT Empty(@newval) AND IndexOf(@newval, "|") == 0 THEN
+            UpsertData("{{ values_de }}", 3, "EmailKey", @email, "Field", @fname, "Value", @newval,
+              "Selected", "true", "Source", "added", "FieldIdx", @k,
+              "Sort", Add(Multiply(@k, 1000), Add(500, DataExtensionRowCount("{{ values_de }}"))))
+          ENDIF
+        NEXT @n
+      ENDIF
+    NEXT @k
+    UpsertData("{{ settings_de }}", 1, "EmailKey", @email, "Inboxes", @clean, "Strategy", @strategy,
+      "MaxRows", @maxrows, "Status", "Submitted", "SubmittedAt", Now())
+    SET @inboxes = @clean
+    SET @done = "true"
+  ENDIF
+ENDIF
+
+IF Empty(@strategy) THEN SET @strategy = "smart" ENDIF
+IF Empty(@maxrows) THEN SET @maxrows = "100" ENDIF
+SET @labelH = Replace(Replace(Replace(Replace(@label, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @inboxesH = Replace(Replace(Replace(Replace(@inboxes, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @blocksH = Replace(Replace(Replace(@blocks, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+]%%
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Proofing setup | {{ brand_name }}</title>
+<style>
+  :root { --primary: {{ brand_primary_color }}; --accent: {{ brand_accent_color }}; --ink: #111827; --muted: #6b7280; --line: #e5e7eb; --bg: #f3f5f9; --err: #b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { background: var(--primary); color: #fff; padding: 16px 24px; font-weight: 700; letter-spacing: 2px; }
+  main { max-width: 1040px; margin: 24px auto 48px; padding: 0 16px; display: grid; grid-template-columns: 1.7fr 1fr; gap: 20px; align-items: start; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 6px 20px rgba(15,23,42,.07); padding: 24px; }
+  h1 { margin: 0 0 4px; font-size: 22px; } h2 { margin: 0 0 12px; font-size: 17px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 0 0 14px; }
+  legend { font-weight: 700; padding: 0 6px; }
+  .vals { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .chip { position: relative; }
+  .chip input { position: absolute; opacity: 0; }
+  .chip span { display: inline-block; border: 1.5px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: 14px; }
+  .chip input:checked + span { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, #fff); font-weight: 600; }
+  .chip input:focus-visible + span { outline: 3px solid var(--accent); }
+  .chip small { color: var(--muted); font-weight: 400; margin-left: 4px; }
+  input[type=text], input[type=number], textarea, select { width: 100%; font: inherit; padding: 9px 11px; border: 1px solid #cbd2dc; border-radius: 8px; }
+  label.lbl { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button { margin-top: 18px; width: 100%; border: 0; border-radius: 8px; padding: 13px; font: inherit; font-weight: 700; color: #fff; background: var(--accent); cursor: pointer; }
+  .errors { border: 1px solid #fecaca; background: #fef2f2; color: var(--err); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+  .ok { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+  pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; background: #f9fafb; border-radius: 8px; padding: 10px; margin: 0; }
+  ul.list { padding-left: 18px; } ul.list li { margin: 6px 0; }
+  .pill { font-size: 12px; border-radius: 999px; padding: 2px 8px; background: #eef2ff; color: #3730a3; margin-left: 6px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } .row2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>{{ brand_name }} · PROOFING</header>
+<main>
+%%[ IF Empty(@email) THEN ]%%
+  <section class="card" style="grid-column:1/-1">
+    <h1>Proofing setup</h1>
+    <p class="muted">Pick an email to choose the values its proofing DE should cover.</p>
+    %%[ IF NOT Empty(@errors) THEN ]%%<div class="errors"><ul>%%=v(@errors)=%%</ul></div>%%[ ENDIF ]%%
+    <ul class="list">
+    %%[
+      SET @list = LookupOrderedRows("{{ settings_de }}", 0, "Label ASC", "Listed", "Y")
+      FOR @i = 1 TO RowCount(@list) DO
+        SET @row = Row(@list, @i)
+        SET @valH = Replace(Replace(Replace(Field(@row, "Label"), "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+    ]%%
+      <li><a href="?email=%%=URLEncode(Field(@row, "EmailKey"), 1)=%%">%%=v(@valH)=%%</a><span class="pill">%%=Field(@row, "Status")=%%</span></li>
+    %%[ NEXT @i ]%%
+    </ul>
+  </section>
+%%[ ELSE ]%%
+  <section class="card">
+    <h1>%%=v(@labelH)=%%</h1>
+    <p class="muted">Tick the values each field should take in the proofing DE. Values from the email's conditions are pre-selected.</p>
+    %%[ IF NOT Empty(@errors) THEN ]%%<div class="errors" role="alert"><strong>Please check:</strong><ul>%%=v(@errors)=%%</ul></div>%%[ ENDIF ]%%
+    %%[ IF @done == "true" THEN ]%%<div class="ok" role="status">Saved. Ask the agent to run <code>proof generate</code> for this email.</div>%%[ ENDIF ]%%
+    <form method="post" action="%%=RequestParameter('PAGEURL')=%%">
+      <input type="hidden" name="pf_submit" value="1">
+      <input type="hidden" name="email" value="%%=v(@email)=%%">
+    %%[
+      SET @rows = LookupOrderedRows("{{ values_de }}", 0, "FieldIdx ASC, Sort ASC", "EmailKey", @email)
+      SET @prev = ""
+      FOR @i = 1 TO RowCount(@rows) DO
+        SET @row = Row(@rows, @i)
+        SET @fidx = Field(@row, "FieldIdx")
+        SET @val = Field(@row, "Value")
+        SET @src = Field(@row, "Source")
+        SET @sort = Field(@row, "Sort")
+        SET @checked = IIF(Lowercase(Field(@row, "Selected")) == "true", "checked", "")
+        SET @valH = Replace(Replace(Replace(Replace(@val, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+        IF @fidx != @prev THEN
+          IF NOT Empty(@prev) THEN
+    ]%%
+        </div><input type="text" name="add_%%=v(@prev)=%%" placeholder="Add values, separated by commas" maxlength="300"></fieldset>
+    %%[
+          ENDIF
+          SET @fnameH = Replace(Replace(Replace(Field(@row, "Field"), "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+    ]%%
+      <fieldset><legend>%%=v(@fnameH)=%%</legend><div class="vals">
+    %%[
+          SET @prev = @fidx
+        ENDIF
+    ]%%
+        <label class="chip"><input type="checkbox" name="sel_%%=v(@sort)=%%" value="1" %%=v(@checked)=%%><span>%%=v(@valH)=%%<small>%%=v(@src)=%%</small></span></label>
+    %%[ NEXT @i ]%%
+    %%[ IF NOT Empty(@prev) THEN ]%%
+        </div><input type="text" name="add_%%=v(@prev)=%%" placeholder="Add values, separated by commas" maxlength="300"></fieldset>
+    %%[ ENDIF ]%%
+      <label class="lbl" for="Inboxes">Proof inboxes (one per line or comma-separated; rows are shared round-robin)</label>
+      <textarea id="Inboxes" name="Inboxes" rows="3" placeholder="qa1@yourcompany.com">%%=v(@inboxesH)=%%</textarea>
+      <div class="row2">
+        <div>
+          <label class="lbl" for="Strategy">Coverage</label>
+          <select id="Strategy" name="Strategy">
+            <option value="smart" %%=IIF(@strategy == "smart", "selected", "")=%%>Smart: every pair of values + each block shown and hidden</option>
+            <option value="full" %%=IIF(@strategy == "full", "selected", "")=%%>Full permutations (capped by max rows)</option>
+            <option value="per_block" %%=IIF(@strategy == "per_block", "selected", "")=%%>Per block: each block shown once and hidden once</option>
+          </select>
+        </div>
+        <div><label class="lbl" for="MaxRows">Max rows</label><input id="MaxRows" name="MaxRows" type="number" min="1" max="500" value="%%=v(@maxrows)=%%"></div>
+      </div>
+      <button type="submit">Save proofing selections</button>
+    </form>
+  </section>
+  <aside class="card">
+    <h2>Visibility conditions</h2>
+    <pre>%%=v(@blocksH)=%%</pre>
+    <p class="muted">Status: <strong>%%=v(@status)=%%</strong>%%[ IF NOT Empty(@rowsGen) AND @rowsGen != "0" THEN ]%% · last generated %%=v(@rowsGen)=%% rows%%[ ENDIF ]%%</p>
+    <p class="muted"><a href="?">All emails</a></p>
+  </aside>
+%%[ ENDIF ]%%
+</main>
+</body>
+</html>

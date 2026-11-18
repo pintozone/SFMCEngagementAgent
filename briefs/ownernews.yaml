@@ -1,0 +1,109 @@
+# Owner update with content blocks that show/hide by model, loyalty tier, region and service status.
+# Used to demonstrate proofing DEs: python -m sfmc_kit proof analyze briefs/ownernews.yaml
+campaign:
+  name: "Aurora Owner Update"
+  code: OWNERNEWS
+  objective: "Monthly owner update with content tailored to each owner's vehicle, tier, region and service status."
+  brand:
+    name: AURORA MOTORS
+    primary_color: "#0B3D91"
+    accent_color: "#00A884"
+    website: https://www.example.com/aurora
+  kpis: {open_rate: 0.35, click_rate: 0.06}
+
+send:
+  send_classification: Default Commercial
+
+audience:
+  update_type: Overwrite
+  de:
+    fields:
+      - {name: SubscriberKey, type: Text, length: 50, pk: true}
+      - {name: EmailAddress,  type: EmailAddress, required: true}
+      - {name: FirstName,     type: Text, length: 50}
+      - {name: Model,         type: Text, length: 50}
+      - {name: ModelYear,     type: Number}
+      - {name: LoyaltyTier,   type: Text, length: 20}
+      - {name: Region,        type: Text, length: 20}
+      - {name: DealerName,    type: Text, length: 100}
+      - {name: ServiceDue,    type: Boolean}
+  sql: |
+    SELECT x.SubscriberKey, x.EmailAddress, x.FirstName, x.Model, x.ModelYear, x.LoyaltyTier, x.Region,
+           x.DealerName, x.ServiceDue
+    FROM (
+      SELECT c.SubscriberKey, c.EmailAddress, c.FirstName, v.Model, v.ModelYear, c.LoyaltyTier, c.Region,
+             d.DealerName,
+             CASE WHEN c.LastServiceDate IS NULL OR c.LastServiceDate < DATEADD(MONTH, -9, GETDATE()) THEN 1 ELSE 0 END AS ServiceDue,
+             ROW_NUMBER() OVER (PARTITION BY c.SubscriberKey ORDER BY v.ModelYear DESC) AS rn
+      FROM [CK_Master_Customers] c
+      INNER JOIN [CK_Master_Vehicles] v ON v.SubscriberKey = c.SubscriberKey
+      LEFT JOIN [CK_Master_Dealers] d ON d.DealerID = c.PreferredDealerID
+      WHERE c.EmailOptIn = 1 AND v.IsCurrent = 1
+    ) x
+    WHERE x.rn = 1
+
+emails:
+  - ref: update
+    name: "Owner Update: November"
+    subject: "%%=v(@FirstName)=%%, your Aurora owner update"
+    preheader: "Tips, offers and events picked for you and your Aurora."
+    template: modular.html
+    blocks:
+      headline: "Your Aurora, this month"
+      intro: "here's what's new for you and your vehicle."
+      cta_text: "Visit your owner hub"
+      cta_url: https://www.example.com/aurora/owners
+      cta_alias: "Owner hub"
+    # Visibility conditions. Fields must exist in the audience DE.
+    # Operators: == != > >= < <= | in [a, b] | not in [..] | is empty | is not empty ; combine with and / or / ( ).
+    # Sections in the same `group` are first-match (IF/ELSEIF/ELSE); `when: otherwise` is the group fallback.
+    sections:
+      - id: ev_tips
+        when: Model in [Volt X, Pulse]
+        title: "Get more range this winter"
+        body: "Precondition your %%=v(@Model)=%% while it's plugged in and keep tyres at the recommended pressure to protect range in the cold."
+        cta_text: "Winter EV guide"
+        cta_url: https://www.example.com/aurora/ev/winter
+      - id: ev_upgrade
+        when: Model not in [Volt X, Pulse]
+        title: "Thinking about electric?"
+        body: "Your %%=v(@Model)=%% could be worth more than you think toward a new Volt X. Get an instant trade-in estimate."
+        cta_text: "Value my trade-in"
+        cta_url: https://www.example.com/aurora/trade-in
+      - id: platinum_concierge
+        group: offer
+        when: LoyaltyTier == Platinum
+        title: "Your Platinum concierge"
+        body: "Free pickup and delivery for any service visit, plus a courtesy car. Just reply to book."
+      - id: gold_bonus
+        group: offer
+        when: LoyaltyTier == Gold
+        title: "Gold members: 2x points"
+        body: "Earn double loyalty points on service and accessories until the end of the month."
+      - id: standard_offer
+        group: offer
+        when: otherwise
+        title: "10% off accessories"
+        body: "Use code OWNER10 for 10% off all-weather mats, roof racks and more."
+      - id: south_event
+        when: Region == South
+        title: "Aurora Drive Day, Nashville"
+        body: "Test the latest models on a closed course, Saturday 6 December. Owners bring a friend free."
+        cta_text: "Reserve a spot"
+        cta_url: https://www.example.com/aurora/events/nashville
+      - id: service_due
+        when: ServiceDue == true
+        title: "Time for a check-up"
+        body: "It's been a while since your last service at %%=v(@DealerName)=%%. Book online in a minute."
+        cta_text: "Book service"
+        cta_url: https://www.example.com/aurora/service/book
+      - id: ridge_accessories
+        when: Model == Ridge and Region in [South, West]
+        title: "Ridge trail kit"
+        body: "All-terrain tyres and skid plates, fitted at your dealer. Made for southern and western trails."
+
+journey:
+  name: "CK_OWNERNEWS Owner Update"
+  entry: {type: data_extension, entry_mode: MultipleEntries}
+  steps:
+    - email: update

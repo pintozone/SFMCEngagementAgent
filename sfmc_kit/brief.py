@@ -42,6 +42,7 @@ class EmailBrief:
     preheader: str
     template: str
     blocks: dict[str, str]
+    sections: list = field(default_factory=list)   # proofing.Section, for emails with visibility conditions
 
 
 @dataclass
@@ -122,9 +123,19 @@ def parse_brief(raw: dict, source: Path | None = None) -> Brief:
         e = dict(e)
         e["blocks"] = {"preheader_hidden": e.get("preheader", ""), "footnote": "", "cta_alias": "Primary CTA",
                        "hero_alt": c.get("name", ""), **(e.get("blocks") or {})}
+        sections = []
+        if e.get("sections"):
+            from .modules import proofing as pf
+            ftypes = {f.name: f.type for f in audience_de.fields}
+            try:
+                sections = [pf.Section.from_dict(x) for x in e["sections"]]
+                pf.validate_sections(sections, ftypes)
+            except pf.ConditionError as err:
+                raise BriefError(f"email {ref}: {err}") from err
+            e["blocks"]["sections"] = pf.compile_sections(sections, ftypes, c.get("brand", {}) or {})
         emails.append(EmailBrief(ref=ref, name=e.get("name", ref), subject=_req(e, "subject", f"email {ref}"),
                                  preheader=e.get("preheader", ""), template=_req(e, "template", f"email {ref}"),
-                                 blocks={k: str(v) for k, v in (e.get("blocks") or {}).items()}))
+                                 blocks={k: str(v) for k, v in (e.get("blocks") or {}).items()}, sections=sections))
 
     j = _req(raw, "journey", "brief")
     entry = j.get("entry", {}) or {}

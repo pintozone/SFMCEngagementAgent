@@ -140,6 +140,33 @@ In live mode it also runs SFMC's own query validator.
 
 **`amp render`** uses SFMC's server-side preview, so all AMPscript runs for real against the chosen DE row.
 
+## Proofing DEs for emails with visibility conditions
+Emails can have `sections:` that show or hide by subscriber data (see `briefs/ownernews.yaml`):
+```yaml
+sections:
+  - {id: ev_tips, when: "Model in [Volt X, Pulse]", title: "…", body: "…"}
+  - {id: platinum_concierge, group: offer, when: "LoyaltyTier == Platinum", title: "…", body: "…"}
+  - {id: standard_offer,     group: offer, when: otherwise,                title: "…", body: "…"}
+  - {id: ridge_accessories, when: "Model == Ridge and Region in [South, West]", title: "…", body: "…"}
+```
+The proofing workflow then covers the combinations:
+```bash
+python -m sfmc_kit proof analyze briefs/ownernews.yaml                 # conditions + candidate values
+python -m sfmc_kit --mode live proof setup briefs/ownernews.yaml       # config DEs + form page (CloudPage)
+#   → open the form CloudPage ?email=CK_OWNERNEWS_EM_update, pick values + proof inboxes, Save
+python -m sfmc_kit --mode live proof generate briefs/ownernews.yaml    # sendable CK_OWNERNEWS_Proofing
+python -m sfmc_kit --mode live proof verify briefs/ownernews.yaml      # SFMC renders each row; blocks checked
+```
+**Coverage.** Smart coverage covers every pair of values and shows and hides every block. The example needs 12 rows instead of 72 permutations. Full permutations and per-block coverage are also available.
+
+**Rows.** Each row records its `ProofCase` and `ExpectedBlocks`, and rows go round-robin to the inboxes entered in the form.
+
+**Verify.** `verify` renders every row on SFMC and compares the blocks that showed against what was expected. It writes an HTML report.
+
+**One-time setup.** The form is one reusable CloudPage, published once with `%%=ContentBlockByKey("CK_PROOF_FormBlock")=%%`. Its selections are stored in `CK_Proof_Values` and `CK_Proof_Settings`.
+
+**Other emails.** Emails not built by the kit work too: pass the email's customer key and `--de`, and the kit parses its IF conditions.
+
 ## Test-drive booking CloudPage
 Add a `cloudpage:` section to a brief (see `briefs/ev_launch.yaml`) and set an email's `cta_url: "{{cloudpage_url}}"`.
 The build then creates:

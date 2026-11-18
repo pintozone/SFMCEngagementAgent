@@ -69,3 +69,28 @@ Write code, then **lint before you hand it over**. Run `audit sync` first so DE 
 **Reading results:**
 - `variable not set here` is informational. Variables often come from the template or from included blocks.
 - `amp render` uses SFMC's server-side preview, so personalization, lookups and the account's sender address are real. "verified" means the rendered email shows that subscriber's address.
+
+## 3. Proofing DEs for emails with visibility conditions
+Use this when an email shows or hides blocks by subscriber data, and the developer needs proof rows that cover the combinations.
+
+**Writing the email (kit-built):**
+- Give the email `sections:` with `when:` conditions. `briefs/ownernews.yaml` is the model.
+- Condition syntax: `Field == v`, `!=`, `> >= < <=`, `in [a, b]`, `not in [..]`, `is empty`, `is not empty`, combined with `and`, `or` and `( )`.
+- Sections that share a `group` are first-match (IF/ELSEIF/ELSE), and `when: otherwise` is the fallback.
+- The kit compiles sections to AMPscript and marks each block so it can be verified.
+
+**Emails built elsewhere:** pass the Content Builder customer key plus `--de <audience DE>`. Their IF conditions are parsed on a best-effort basis. There are no block markers, so the rows cover the value combinations, but `verify` can only report render errors.
+
+**Workflow** (live writes need confirmation; never send):
+1. `proof analyze <brief.yaml|email key>` lists the conditions and candidate values: values from the conditions, an "other" value, empty, and common values from the data.
+2. `--mode live proof setup <target>` creates or refreshes `CK_Proof_Values`, `CK_Proof_Settings` and the form block `CK_PROOF_FormBlock`. The first time, the user publishes a CloudPage containing only `%%=ContentBlockByKey("CK_PROOF_FormBlock")=%%`.
+3. The user opens `<page>?email=<EmailKey>`, ticks or adds values, enters proof inboxes, chooses the coverage and saves. `proof answer --inboxes … --select "Field=a|b"` does the same from the CLI, if the user asks.
+4. `--mode live proof generate <target>` builds the sendable `CK_<CODE>_Proofing`:
+   - **Smart** (default): every pair of values appears together, and every block is seen both shown and hidden.
+   - **Full:** every permutation, up to MaxRows.
+   - **Per block:** each block shown once and hidden once.
+   - Rows are named `PROOF-<CODE>-NNN`, with `FirstName` "Proof NNN" and inboxes assigned round-robin, plus `ProofCase` and `ExpectedBlocks` columns.
+5. `--mode live proof verify <target>`: SFMC renders every row server-side, and the kit compares the blocks that rendered against `ExpectedBlocks`. The report goes to `data/reports/proof_<CODE>_live.html`.
+6. The user sends proofs from Content Builder: **Preview and Test → Test Send → Recipients: Data Extension → `CK_<CODE>_Proofing`**.
+
+**SFMC quirk:** preview row numbers don't follow the REST row order, so `verify` and `amp render --key` match each render to its row by a column that has unique values (for example "Proof 007").

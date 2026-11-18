@@ -206,37 +206,105 @@ class LiveBackend(Backend):
         return {"valid": bool(r.get("queryValid")), "errors": clean(r.get("errors")),
                 "warnings": clean(r.get("warnings"))}
 
-    def render_email(self, email_key: str, de_key: str, subscriber_key: str | None = None,
-                     row: int | None = None) -> dict:
-        """Server-side preview of an email for one row of a DE (AMPscript fully evaluated by SFMC).
-        Preview rows are addressed by position: row N = (N-2)th row of the REST rowset (verified empirically);
-        when the email shows the address we confirm we rendered the right subscriber."""
+    def _preview(self, legacy: Any, de_id: str, n: int) -> str | None:
+        try:
+            r = self.rest.post(f"/guide/v1/emails/{legacy}/dataExtension/{de_id}/row/{n}/preview?kind=html,text", {})
+        except SFMCError:
+            return None
+        views = {v.get("contentType", ""): v.get("content", "") for v in (r.get("message") or {}).get("views", [])}
+        return next((c for t, c in views.items() if "html" in t.lower()), "")
+
+    @staticmethod
+    def _identity_cols(rows: list[dict]) -> list[str]:
+        """Columns whose non-empty values are unique across rows (used to recognise which row a preview shows)."""
+        if not rows:
+            return []
+        out = []
+        pref = ["FirstName", "EmailAddress", "SubscriberKey"]
+        cols = sorted(rows[0].keys(), key=lambda c: (pref.index(c) if c in pref else 9, c))
+        for c in cols:
+            vals = [str(r.get(c) or "").strip() for r in rows]
+            if all(len(v) >= 4 for v in vals) and len({v.lower() for v in vals}) == len(vals):
+                out.append(c)
+        return out
+
+    @staticmethod
+    def _identify(html: str, rows: list[dict], cols: list[str]) -> int | None:
+        import html as _h
+        text = _h.unescape(html or "").lower()
+        for c in cols:
+            hits = [i for i, r in enumerate(rows) if str(r.get(c)).strip().lower() in text]
+            if len(hits) == 1:
+                return hits[0]
+        return None
+
+    def preview_rows(self, email_key: str, de_key: str, rows: list[dict] | None = None) -> dict[int, str]:
+        """Render every row of a DE server-side and return {row position in `rows`: html}.
+        SFMC addresses preview rows by an internal row number that doesn't follow the REST order,
+        so each render is matched back to its row by a uniquely-valued column it displays."""
+        legacy, de_id = self._email_and_de(email_key, de_key)
+        rows = self.read_rows(de_key, max_rows=2500) if rows is None else rows
+        cols = self._identity_cols(rows)
+        found: dict[int, str] = {}
+        misses = 0
+        for n in range(1, len(rows) + 6):
+            html = self._preview(legacy, de_id, n)
+            if html is None:
+                misses += 1
+                if misses > 5 and n > len(rows):
+                    break
+                continue
+            i = self._identify(html, rows, cols)
+            if i is not None and i not in found:
+                found[i] = html
+            if len(found) == len(rows):
+                break
+        return found
+
+    def _email_and_de(self, email_key: str, de_key: str) -> tuple[Any, str]:
         asset = self._find_asset(email_key)
         if not asset:
             raise SFMCError(f"email {email_key} not found in Content Builder")
-        legacy = (asset.get("legacyData") or {}).get("legacyId")
         de = self.get_de(de_key)
         if not de:
             raise SFMCError(f"DE {de_key} not found")
-        rows = self.read_rows(de_key, max_rows=2500)
+        return (asset.get("legacyData") or {}).get("legacyId"), de["object_id"]
+
+    def render_email(self, email_key: str, de_key: str, subscriber_key: str | None = None,
+                     row: int | None = None, rows: list[dict] | None = None) -> dict:
+        """Server-side preview of an email for one DE row (AMPscript fully evaluated by SFMC).
+        With subscriber_key, nearby preview rows are tried and the right one is recognised from its content."""
+        asset = self._find_asset(email_key)
+        legacy, de_id = self._email_and_de(email_key, de_key)
+        rows = self.read_rows(de_key, max_rows=2500) if rows is None else rows
+        subject = ((asset.get("views") or {}).get("subjectline") or {}).get("content")
         if subscriber_key:
             keycol = next((k for k in (rows[0] if rows else {}) if k.lower() == "subscriberkey"), None)
             idx = next((i for i, r in enumerate(rows) if keycol and str(r[keycol]) == subscriber_key), None)
             if idx is None:
                 raise SFMCError(f"SubscriberKey {subscriber_key} not in {de_key} (first 2,500 rows checked)")
-            row = idx + 2
-        row = row or 2
-        record = rows[row - 2] if 0 <= row - 2 < len(rows) else {}
-        r = self.rest.post(f"/guide/v1/emails/{legacy}/dataExtension/{de['object_id']}/row/{row}/preview?kind=html,text", {})
-        views = {v.get("contentType", ""): v.get("content", "") for v in (r.get("message") or {}).get("views", [])}
-        html = next((c for t, c in views.items() if "html" in t.lower()), "")
-        email_col = next((k for k in record if k.lower() == "emailaddress"), None)
-        verified = None
-        if email_col and record.get(email_col) and "@" in html:
-            verified = record[email_col].lower() in html.lower()
-        subject = ((asset.get("views") or {}).get("subjectline") or {}).get("content")
-        return {"html": html, "text": next((c for t, c in views.items() if "text" in t.lower()), ""),
-                "row": row, "record": record, "verified": verified, "subject_template": subject}
+            cols = self._identity_cols(rows)
+            tried = []
+            for n in [idx + 2, idx + 1, idx + 3, idx, idx + 4] + list(range(1, len(rows) + 6)):
+                if n < 1 or n in tried:
+                    continue
+                tried.append(n)
+                html = self._preview(legacy, de_id, n)
+                if html is None:
+                    continue
+                got = self._identify(html, rows, cols)
+                if got == idx or (not cols and n == idx + 2):
+                    return {"html": html, "row": n, "record": rows[idx], "verified": bool(cols),
+                            "subject_template": subject}
+                if len(tried) > len(rows) + 8:
+                    break
+            raise SFMCError(f"couldn't find a preview of {subscriber_key}: no column with unique values appears "
+                            "in the rendered email (use --row N instead)")
+        n = row or 2
+        html = self._preview(legacy, de_id, n) or ""
+        got = self._identify(html, rows, self._identity_cols(rows))
+        return {"html": html, "row": n, "record": rows[got] if got is not None else {}, "verified": got is not None,
+                "subject_template": subject}
 
     def delete_asset(self, asset_id: Any) -> None:
         self.rest.delete(f"/asset/v1/content/assets/{asset_id}", allow_404=True)

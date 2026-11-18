@@ -467,6 +467,83 @@ def cmd_amp(a, be: Backend) -> None:
         print("  " + text.strip()[:600])
 
 
+def cmd_proof(a, be: Backend) -> None:
+    from . import proofing_service as ps
+    from .modules import cloudpages as cpm
+    t = ps.resolve_target(be, a.target, getattr(a, "email_ref", None), getattr(a, "de", None))
+    if a.proof_cmd == "analyze":
+        print(f"{t.label}  [{t.email_key}]  conditions from {t.analysis.source}")
+        for c in t.analysis.conditions:
+            print(f"  • {c}")
+        data = be.read_rows(t.audience_key, max_rows=2500) if t.audience_key and be.get_de(t.audience_key) else []
+        cands = __import__("sfmc_kit.modules.proofing", fromlist=["candidates"]).candidates(t.analysis, data, t.field_types)
+        print("\nCandidate values (* = pre-selected):")
+        by: dict[str, list[str]] = {}
+        for c in cands:
+            by.setdefault(c.field, []).append(("*" if c.selected else "") + f"{c.value} ({c.source})")
+        for f, vs in by.items():
+            print(f"  {f}: {', '.join(vs)}")
+        return
+    if a.proof_cmd == "setup":
+        brand = {"name": "AURORA MOTORS", "primary_color": "#0B3D91", "accent_color": "#00A884"}
+        if a.target.endswith((".yaml", ".yml")):
+            brand = {**brand, **(load_brief(a.target).brand or {})}
+        if be.mode == "live":
+            confirm(f"Create/update proofing config for {t.email_key} in the LIVE tenant "
+                    f"({ps.VALUES_DE}, {ps.SETTINGS_DE}, {ps.FORM_BLOCK})?", "SETUP", a.yes)
+        r = ps.setup(be, t, brand)
+        print(f"Fields: {', '.join(r['fields'])}  ({r['candidates']} candidate values, {r['new_rows']} new)")
+        print("\nOne-time: publish a CloudPage whose only content is")
+        print(f'    %%=ContentBlockByKey("{ps.FORM_BLOCK}")=%%')
+        print(f"Then open it with ?email={t.email_key}  (or with no parameter to list every email set up for proofing).")
+        return
+    if a.proof_cmd == "status":
+        s = ps.read_settings(be, t.email_key)
+        if not s:
+            print(f"{t.email_key}: not set up (run proof setup)"); return
+        print(f"{t.email_key}: status {s.get('Status')}, strategy {s.get('Strategy')}, max rows {s.get('MaxRows')}, "
+              f"inboxes {s.get('Inboxes') or '(none yet)'}, last generated {s.get('Rows') or 0} rows")
+        sel: dict[str, list[str]] = {}
+        for r in ps.read_values(be, t.email_key):
+            sel.setdefault(r["Field"], []).append(("[x] " if ps._true(r.get("Selected")) else "[ ] ") + str(r["Value"]))
+        for f, vs in sel.items():
+            print(f"  {f}: {' | '.join(vs)}")
+        return
+    if a.proof_cmd == "answer":
+        select = {}
+        for item in a.select or []:
+            f, _, vs = item.partition("=")
+            select[f.strip()] = [v.strip() for v in vs.split("|") if v.strip()]
+        if be.mode == "live":
+            confirm(f"Save these selections for {t.email_key} in the LIVE config DEs?", "SAVE", a.yes)
+        ps.answer(be, t.email_key, [x.strip() for x in a.inboxes.split(",") if x.strip()], a.strategy, a.max_rows, select)
+        print("Saved (status Submitted).")
+        return
+    if a.proof_cmd == "generate":
+        if be.mode == "live":
+            confirm(f"(Re)create sendable DE {t.proof_de} in the LIVE tenant and load proofing rows?", "GENERATE", a.yes)
+        r = ps.generate(be, t, force=a.force)
+        for n in r["notes"]:
+            print(f"  · {n}")
+        cov = r["coverage"]
+        print(f"  · coverage: {cov['pairs_covered']}/{cov['pairs_total']} value pairs; blocks never shown: "
+              f"{cov['blocks_never_shown'] or 'none'}; never hidden: {cov['blocks_never_hidden'] or 'none'}")
+        print(f"\n{len(r['rows'])} rows in {r['proof_de']} (strategy {r['strategy']}, inboxes round-robin: {', '.join(r['inboxes'])})")
+        table([{k: x[k] for k in ("SubscriberKey", "EmailAddress", "ProofCase", "ExpectedBlocks")} for x in r["rows"]],
+              limit=a.limit, maxw=70)
+        return
+    if a.proof_cmd == "verify":
+        r = ps.verify(be, t, log=lambda s: None)
+        print(f"{r['summary']['ok']} ok, {r['summary']['mismatch']} mismatch, {r['summary']['error']} error → {r['report']}")
+        bad = [x for x in r["results"] if x["status"] != "ok"]
+        if bad:
+            table([{"row": x["SubscriberKey"], "status": x["status"], "case": x["ProofCase"],
+                    "missing": ", ".join(sorted(set(x["expected"]) - set(x["actual"]))),
+                    "unexpected": ", ".join(sorted(set(x["actual"]) - set(x["expected"]))), "error": x["error"] or ""}
+                   for x in bad], maxw=60, limit=200)
+            raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", choices=["mock", "live"], default=argparse.SUPPRESS)
@@ -555,6 +632,20 @@ def main(argv: list[str] | None = None) -> int:
     y.add_argument("email", help="email customer key"); y.add_argument("--de", required=True)
     y.add_argument("--key", help="SubscriberKey"); y.add_argument("--row", type=int)
 
+    x = sub.add_parser("proof", help="proofing DEs for emails with visibility conditions")
+    pr = x.add_subparsers(dest="proof_cmd", required=True)
+    for name, hlp in (("analyze", "conditions, fields and candidate values"), ("setup", "config DEs + form page"),
+                      ("status", "saved selections"), ("answer", "save selections from the CLI (same as the form)"),
+                      ("generate", "build the proofing DE"), ("verify", "render every proofing row and check blocks")):
+        y = pr.add_parser(name, help=hlp)
+        y.add_argument("target", help="brief .yaml, or an email's Content Builder customer key")
+        y.add_argument("--email-ref", help="which email of the brief"); y.add_argument("--de", help="audience DE for a non-brief email")
+        if name == "answer":
+            y.add_argument("--inboxes", required=True); y.add_argument("--strategy", choices=["smart", "full", "per_block"])
+            y.add_argument("--max-rows", type=int); y.add_argument("--select", action="append", help='Field=v1|v2 (repeatable)')
+        if name == "generate":
+            y.add_argument("--force", action="store_true"); y.add_argument("--limit", type=int, default=60)
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -565,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
          "brief": cmd_brief, "cloudpage": cmd_cloudpage, "audit": cmd_audit, "sql": cmd_sql,
-         "amp": cmd_amp}[a.cmd](a, be)
+         "amp": cmd_amp, "proof": cmd_proof}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
