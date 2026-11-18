@@ -253,6 +253,70 @@ def cmd_cloudpage(a, be: Backend) -> None:
     print(f"  {out / f'{brief.code}_cloudpage.ampscript.html'}  (exact page body sent to SFMC)")
 
 
+def _audit_store(be: Backend):
+    from .audit import AuditStore
+    mid = "mock"
+    if be.mode == "live":
+        mid = be.cfg.account_id or str(be.whoami().get("mid"))  # type: ignore[attr-defined]
+    return AuditStore(Sandbox().db, mid, be.mode)
+
+
+def cmd_audit(a, be: Backend) -> None:
+    from . import audit as au
+    store = _audit_store(be)
+    if a.audit_cmd == "sync":
+        print(f"Inventorying MID {store.mid} ({be.mode}), read-only…")
+        counts = au.sync(be, store.db, store.mid)
+        print("Synced: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+        return
+    if not store.synced():
+        raise SFMCError(f"No inventory for MID {store.mid} ({be.mode}) yet: run `audit sync` first")
+    s = store.synced()
+    if a.audit_cmd == "impact":
+        ref, _, field = a.object.partition(".") if a.object.count(".") == 1 and not store.resolve(a.object) else (a.object, "", "")
+        obj = store.resolve(ref)
+        if not obj:
+            raise SFMCError(f"'{ref}' not found in the inventory (synced {s['synced_at']})")
+        print(f"{obj['type']}: {obj['name']} (key {obj['key']})   inventory synced {s['synced_at']}")
+        if obj["type"] == "de":
+            flds = store.fields(obj["key"])
+            print(f"  fields: {', '.join(f['name'] + ('*' if f['pk'] else '') for f in flds)}  (* = primary key)")
+        if field:
+            print(f"\nWhere field '{field}' is used (text match, so treat as a starting point):")
+            table(store.field_usage(obj, field), ["match", "type", "name"], limit=200)
+        imp = store.impact(obj["type"], obj["key"])
+        def fmt(rows):
+            seen, out = {(obj["type"], obj["key"])}, []
+            for r in rows:  # first (shallowest) path to each object only
+                if (r["t"], r["k"]) in seen:
+                    continue
+                seen.add((r["t"], r["k"]))
+                out.append({"depth": r["d"], "object": f"{r['t']}: {store.name_of(r['t'], r['k'])}",
+                            "relation": r["rel"], "via": f"{r['via_t']}: {store.name_of(r['via_t'], r['via_k'])}"})
+            return out
+        print("\nDepends on this (affected if it changes):")
+        table(fmt(imp["upstream"]), ["depth", "object", "relation", "via"], limit=200)
+        print("\nThis depends on:")
+        table(fmt(imp["downstream"]), ["depth", "object", "relation", "via"], limit=200)
+    elif a.audit_cmd == "health":
+        f = store.health(stale_days=a.stale_days)
+        if a.severity:
+            f = [x for x in f if x["severity"] in a.severity.split(",")]
+        print(f"{len(f)} finding(s) for MID {store.mid} ({be.mode}), inventory synced {s['synced_at']}")
+        table(f, ["severity", "check", "object", "detail"], limit=a.limit)
+    elif a.audit_cmd == "search":
+        hits = store.search(a.text, regex=a.regex)
+        print(f"{len(hits)} line(s) match in queries, emails, blocks and pages")
+        table(hits, ["type", "name", "line", "text"], limit=a.limit)
+    elif a.audit_cmd == "report":
+        from .audit_report import render
+        out = DATA_DIR / "reports"
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"audit_{store.mid}_{be.mode}.html"
+        path.write_text(render(store, store.health(stale_days=a.stale_days)))
+        print(f"Report: {path}")
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", choices=["mock", "live"], default=argparse.SUPPRESS)
@@ -312,6 +376,19 @@ def main(argv: list[str] | None = None) -> int:
     y = cs.add_parser("bookings", help="list submitted bookings"); y.add_argument("code")
     y.add_argument("--limit", type=int, default=50)
 
+    x = sub.add_parser("audit", help="tenant inventory, dependencies, impact and health (read-only)")
+    au = x.add_subparsers(dest="audit_cmd", required=True)
+    au.add_parser("sync", help="inventory the business unit into the sandbox DB")
+    y = au.add_parser("impact", help="what depends on an object (DE, DE.Field, query, email, block…)")
+    y.add_argument("object")
+    y = au.add_parser("health", help="failing automations, broken references, risky SQL, stale objects")
+    y.add_argument("--stale-days", type=int, default=365); y.add_argument("--severity")
+    y.add_argument("--limit", type=int, default=100)
+    y = au.add_parser("search", help="find text in queries, emails, blocks and pages")
+    y.add_argument("text"); y.add_argument("--regex", action="store_true"); y.add_argument("--limit", type=int, default=100)
+    y = au.add_parser("report", help="self-contained HTML audit report")
+    y.add_argument("--stale-days", type=int, default=365)
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -321,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         {"auth-test": cmd_auth_test, "de": cmd_de, "seed": cmd_seed, "build": cmd_build,
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
-         "brief": cmd_brief, "cloudpage": cmd_cloudpage}[a.cmd](a, be)
+         "brief": cmd_brief, "cloudpage": cmd_cloudpage, "audit": cmd_audit}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

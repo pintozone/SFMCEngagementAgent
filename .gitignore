@@ -6,3 +6,4 @@ data/*.db
 data/sample/
 data/previews/
 data/manifests/
+data/reports/

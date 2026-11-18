@@ -96,6 +96,24 @@ Templates: `hero_cta.html` (launch/invite), `offer_card.html` (offer value, code
 `newsletter.html` (intro + 3 cards), `service_reminder.html` (vehicle/last-service box).
 Run `python -m sfmc_kit templates` for the blocks each one needs.
 
+## Tenant audit and dependencies
+Inventory the whole business unit (read-only, seconds) and ask questions offline:
+```bash
+python -m sfmc_kit --mode live audit sync                         # DEs, fields, queries, automations, journeys, entry events, emails/blocks/pages
+python -m sfmc_kit --mode live audit impact CK_Master_Customers   # what depends on it (follows data flow into journeys)
+python -m sfmc_kit --mode live audit impact CK_Master_Customers.LoyaltyTier   # where a field is used
+python -m sfmc_kit --mode live audit search "UpsertData"          # find code references
+python -m sfmc_kit --mode live audit health                       # failing automations, missing DEs/blocks, SELECT *, retention, stale objects
+python -m sfmc_kit --mode live audit report                       # self-contained HTML report in data/reports/
+```
+Dependencies come from:
+- the SQL `FROM`/`JOIN` sources and targets of queries
+- automation steps
+- journey entry events and email activities
+- AMPscript/SSJS in emails, blocks and CloudPages (`Lookup*`, `Insert/Upsert/Update/DeleteData`, `DataExtension.Init`, `ContentBlockByKey/ById`, `CloudPagesURL`)
+
+They're stored in SQLite (`inv_*` tables) and walked with recursive queries. The skill `.claude/skills/sfmc-developer` guides these investigations.
+
 ## Test-drive booking CloudPage
 Add a `cloudpage:` section to a brief (see `briefs/ev_launch.yaml`) and set an email's `cta_url: "{{cloudpage_url}}"`.
 The build then creates:
