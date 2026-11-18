@@ -114,6 +114,32 @@ Dependencies come from:
 
 They're stored in SQLite (`inv_*` tables) and walked with recursive queries. The skill `.claude/skills/sfmc-developer` guides these investigations.
 
+## SQL, AMPscript and SSJS development
+```bash
+python -m sfmc_kit --mode live sql lint query.sql --target CK_EVLAUNCH_Audience   # SFMC rules + SFMC's validator
+python -m sfmc_kit sql explain query.sql                                         # sources, joins, filters, outputs
+python -m sfmc_kit --mode live sql run query.sql --top 50                        # temporary DE/query/automation, rows, cleanup
+python -m sfmc_kit --mode live amp lint Survey_Cloud_Page                        # file, or email/block/page by name
+python -m sfmc_kit --mode live amp render CK_EVLAUNCH_EM_teaser --de CK_EVLAUNCH_Audience --key AUR-100007
+```
+**SQL lint** catches:
+- non-SELECT statements, variables, temp tables and `SELECT INTO`
+- `ORDER BY` without `TOP`, and `SELECT *` (an error when there's a JOIN)
+- unnamed or duplicate columns
+- event data views without a date filter, or looking back more than 6 months
+- unknown DEs and fields, from the inventory
+- target mismatches: unknown columns, missing required or primary-key fields, possible duplicate keys, and values that may be truncated
+
+In live mode it also runs SFMC's own query validator.
+
+**AMPscript and SSJS lint** catches:
+- unbalanced blocks, IF/ENDIF and FOR/NEXT
+- `=` used for comparison, unknown functions, smart quotes and unclosed strings
+- `Lookup`/`Upsert…` calls naming DEs or fields that don't exist
+- SSJS without `Platform.Load`, writes without try/catch, and ES6 syntax
+
+**`amp render`** uses SFMC's server-side preview, so all AMPscript runs for real against the chosen DE row.
+
 ## Test-drive booking CloudPage
 Add a `cloudpage:` section to a brief (see `briefs/ev_launch.yaml`) and set an email's `cta_url: "{{cloudpage_url}}"`.
 The build then creates:

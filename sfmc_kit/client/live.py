@@ -1,6 +1,7 @@
 """LiveBackend: talks to a real SFMC tenant through REST + SOAP."""
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -195,6 +196,47 @@ class LiveBackend(Backend):
             return {"id": res["id"], "key": key, "created": False}
         res = self.rest.post("/asset/v1/content/assets", payload)
         return {"id": res["id"], "key": key, "created": True}
+
+    # ------------------------------------------------------------------ developer tools
+    def validate_sql(self, sql: str) -> dict:
+        """SFMC's own syntax check for query activity SQL (doesn't run anything)."""
+        r = self.rest.post("/automation/v1/queries/actions/validate/", {"Text": sql})
+        clean = lambda xs: [re.sub(r"\s+", " ", (x.get("message") or "").replace("Just a heads-up...", "")).strip()
+                            for x in xs or []]
+        return {"valid": bool(r.get("queryValid")), "errors": clean(r.get("errors")),
+                "warnings": clean(r.get("warnings"))}
+
+    def render_email(self, email_key: str, de_key: str, subscriber_key: str | None = None,
+                     row: int | None = None) -> dict:
+        """Server-side preview of an email for one row of a DE (AMPscript fully evaluated by SFMC).
+        Preview rows are addressed by position: row N = (N-2)th row of the REST rowset (verified empirically);
+        when the email shows the address we confirm we rendered the right subscriber."""
+        asset = self._find_asset(email_key)
+        if not asset:
+            raise SFMCError(f"email {email_key} not found in Content Builder")
+        legacy = (asset.get("legacyData") or {}).get("legacyId")
+        de = self.get_de(de_key)
+        if not de:
+            raise SFMCError(f"DE {de_key} not found")
+        rows = self.read_rows(de_key, max_rows=2500)
+        if subscriber_key:
+            keycol = next((k for k in (rows[0] if rows else {}) if k.lower() == "subscriberkey"), None)
+            idx = next((i for i, r in enumerate(rows) if keycol and str(r[keycol]) == subscriber_key), None)
+            if idx is None:
+                raise SFMCError(f"SubscriberKey {subscriber_key} not in {de_key} (first 2,500 rows checked)")
+            row = idx + 2
+        row = row or 2
+        record = rows[row - 2] if 0 <= row - 2 < len(rows) else {}
+        r = self.rest.post(f"/guide/v1/emails/{legacy}/dataExtension/{de['object_id']}/row/{row}/preview?kind=html,text", {})
+        views = {v.get("contentType", ""): v.get("content", "") for v in (r.get("message") or {}).get("views", [])}
+        html = next((c for t, c in views.items() if "html" in t.lower()), "")
+        email_col = next((k for k in record if k.lower() == "emailaddress"), None)
+        verified = None
+        if email_col and record.get(email_col) and "@" in html:
+            verified = record[email_col].lower() in html.lower()
+        subject = ((asset.get("views") or {}).get("subjectline") or {}).get("content")
+        return {"html": html, "text": next((c for t, c in views.items() if "text" in t.lower()), ""),
+                "row": row, "record": record, "verified": verified, "subject_template": subject}
 
     def delete_asset(self, asset_id: Any) -> None:
         self.rest.delete(f"/asset/v1/content/assets/{asset_id}", allow_404=True)

@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -30,17 +31,17 @@ def get_backend(mode: str, verbose: bool) -> Backend:
     return MockBackend(mock_db_path(), verbose=verbose)
 
 
-def table(rows: list[dict], cols: list[str] | None = None, limit: int = 50) -> None:
+def table(rows: list[dict], cols: list[str] | None = None, limit: int = 50, maxw: int = 40) -> None:
     if not rows:
         print("  (no rows)")
         return
     cols = cols or list(rows[0].keys())
     rows = rows[:limit]
-    w = {c: min(40, max(len(c), *(len(str(r.get(c, ""))) for r in rows))) for c in cols}
+    w = {c: min(maxw, max(len(c), *(len(str(r.get(c, ""))) for r in rows))) for c in cols}
     print("  " + "  ".join(c.ljust(w[c]) for c in cols))
     print("  " + "  ".join("-" * w[c] for c in cols))
     for r in rows:
-        print("  " + "  ".join(str(r.get(c, "") if r.get(c) is not None else "")[:40].ljust(w[c]) for c in cols))
+        print("  " + "  ".join(str(r.get(c, "") if r.get(c) is not None else "")[:maxw].ljust(w[c]) for c in cols))
 
 
 def confirm(prompt: str, expected: str, assume_yes: bool) -> None:
@@ -317,6 +318,155 @@ def cmd_audit(a, be: Backend) -> None:
         print(f"Report: {path}")
 
 
+def _read_src(arg: str) -> str:
+    if arg == "-":
+        return sys.stdin.read()
+    p = Path(arg)
+    if p.exists():
+        return p.read_text()
+    return arg  # literal SQL / code
+
+
+def _store_if_synced(be: Backend):
+    st = _audit_store(be)
+    if st.synced():
+        return st
+    print(f"(no inventory for {be.mode} yet: DE/field checks skipped. Run `audit sync` to enable them.)")
+    return None
+
+
+def cmd_sql(a, be: Backend) -> None:
+    from . import devtools as dt
+    sql = _read_src(a.sql)
+    if a.sql_cmd == "lint":
+        res = dt.lint_sql(sql, _store_if_synced(be), a.target)
+        if be.mode == "live" and not a.no_validate:
+            v = be.validate_sql(sql)  # type: ignore[attr-defined]
+            for e in v["errors"]:
+                res.add("error", "SFMC validation", e)
+            for w in v["warnings"]:
+                res.add("info", "SFMC validation", w)
+        table(res.rows(), ["severity", "rule", "line", "message"], limit=200, maxw=140)
+        print("OK" if res.ok else "FAILED")
+        if not res.ok:
+            raise SystemExit(1)
+    elif a.sql_cmd == "explain":
+        import json as _j
+        ex = dt.explain_sql(sql, _store_if_synced(be))
+        print("Sources:"); table(ex["sources"], ["alias", "source", "kind"])
+        print("Joins:"); table(ex["joins"], ["type", "source", "on"])
+        print(f"Filters: {ex['filters'] or '(none)'}")
+        print(f"Grouping: {ex['grouping'] or '(none)'}   Dedupe with ROW_NUMBER(): {ex['dedupe']}   Subqueries: {ex['subqueries']}")
+        print("Output columns:"); table(ex["outputs"], ["name", "expr"])
+    elif a.sql_cmd == "run":
+        res = dt.lint_sql(sql)
+        if not res.ok:
+            table(res.rows(), ["severity", "rule", "line", "message"])
+            raise SystemExit("Fix the lint errors first.")
+        if be.mode == "mock":
+            import sqlite3
+            from .client.sqlxlate import translate
+            db = sqlite3.connect(f"file:{mock_db_path()}?mode=ro", uri=True)
+            db.row_factory = sqlite3.Row
+            rows = [dict(r) for r in db.execute(translate(sql)).fetchmany(a.top)]
+            print(f"{len(rows)} row(s) (mock tenant, first {a.top})")
+            table(rows, limit=a.top)
+            return
+        v = be.validate_sql(sql)  # type: ignore[attr-defined]
+        if not v["valid"]:
+            raise SFMCError("SFMC validation failed: " + "; ".join(v["errors"]))
+        rows = _sql_run_live(a, be, sql, dt)
+        print(f"{len(rows)} row(s) (live, first {a.top})")
+        table(rows, limit=a.top)
+
+
+def _sql_run_live(a, be, sql: str, dt) -> list[dict]:
+    from .modules.automation import AutomationSpec, QuerySpec
+    from .modules.data_extensions import FieldSpec
+    store = _store_if_synced(be)
+    cols = dt.output_columns(sql)
+    aliases = dt.table_aliases(sql)
+    fields = []
+    for c in cols:
+        ftype, length = "Text", 4000
+        if store and c["field"] and c["alias_src"]:
+            src = store.resolve(aliases.get(c["alias_src"].lower(), ""))
+            sf = next((f for f in store.fields(src["key"]) if f["name"].lower() == c["field"].lower()), None) if src else None
+            if sf and sf["type"] in ("Number", "Date", "Boolean", "Decimal"):
+                ftype, length = sf["type"], None
+        fields.append(FieldSpec(c["name"], ftype, length) if ftype == "Text" else FieldSpec(c["name"], ftype))
+    name = dt.scratch_name(sql)
+    if any(re.fullmatch(r"(\w+\.)?\*", c["expr"].strip()) for c in cols):
+        raise SFMCError("list the columns explicitly for `sql run` (SELECT * can't be typed into a scratch DE)")
+    collist = ", ".join(f"[{c['name']}]" for c in cols)
+    wrapped = sql if re.search(r"\bSELECT\s+(DISTINCT\s+)?TOP\b", sql, re.I) else \
+        f"SELECT TOP {a.top} {collist} FROM (\n{sql}\n) AS _q"   # SFMC rejects SELECT * when JOINs are present
+    confirm(f"Create scratch DE/query/automation {name} in the LIVE tenant, run it, read up to {a.top} rows, "
+            f"then delete all three?", "RUN", a.yes)
+    spec = DESpec(name, name, fields, folder="CampaignKit/Scratch", description="sfmc_kit sql run (temporary)")
+    created = []
+    try:
+        be.ensure_de(spec); created.append(("de", name))
+        q = be.upsert_query(QuerySpec(name, name, wrapped, name, name)); created.append(("query", q["id"]))
+        au = be.upsert_automation(AutomationSpec(name, name, [[name]]), {name: q["id"]}); created.append(("automation", au["id"]))
+        status = be.run_automation(au["id"], timeout=a.timeout)
+        print(f"  automation finished: {status}")
+        return be.read_rows(name, max_rows=a.top)
+    finally:
+        if a.keep:
+            print(f"  kept scratch objects {name} (--keep)")
+        else:
+            for kind, ident in reversed(created):
+                try:
+                    {"automation": be.delete_automation, "query": be.delete_query, "de": be.delete_de}[kind](ident)
+                except Exception as e:  # report but keep cleaning
+                    print(f"  ! could not delete {kind} {ident}: {e}")
+            print(f"  cleaned up scratch objects {name}")
+
+
+def cmd_amp(a, be: Backend) -> None:
+    from . import devtools as dt
+    if a.amp_cmd == "lint":
+        store = _store_if_synced(be)
+        p = Path(a.source)
+        if p.exists():
+            code, label = p.read_text(), str(p)
+        else:
+            obj = store.resolve(a.source) if store else None
+            if not obj or not obj.get("body"):
+                raise SFMCError(f"{a.source} is neither a file nor an email/block/page in the inventory")
+            code, label = obj["body"], f"{obj['type']}: {obj['name']}"
+        res = dt.lint_ampscript(code, store, a.de)
+        print(f"Linting {label}")
+        table(res.rows(), ["severity", "rule", "line", "message"], limit=200, maxw=140)
+        print("OK" if res.ok else "FAILED")
+        if not res.ok:
+            raise SystemExit(1)
+    elif a.amp_cmd == "render":
+        out = DATA_DIR / "previews"
+        out.mkdir(parents=True, exist_ok=True)
+        if be.mode == "live":
+            r = be.render_email(a.email, a.de, a.key, a.row)  # type: ignore[attr-defined]
+            html = r["html"]
+            who = r["record"].get("SubscriberKey") or r["record"].get("subscriberkey") or f"row {r['row']}"
+            note = {True: "verified", False: "NOT verified: the rendered email shows a different address", None: "unverified"}[r["verified"]]
+        else:
+            from .modules.assets import preview
+            body = next((o for o in be.db.execute("SELECT payload FROM mock_objects WHERE type='asset' AND key=?", (a.email,))), None)  # type: ignore[attr-defined]
+            if not body:
+                raise SFMCError(f"email {a.email} not found in the mock tenant")
+            import json as _j
+            rows = be.read_rows(a.de, max_rows=100000)
+            rec = next((x for x in rows if a.key and str(x.get("SubscriberKey")) == a.key), rows[(a.row or 2) - 2] if rows else {})
+            html, who, note = preview(_j.loads(body[0])["html"], rec), rec.get("SubscriberKey"), "local emulator"
+        path = out / f"render_{a.email}_{who}.html"
+        path.write_text(html)
+        import html as _h
+        text = _h.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"<style.*?</style>", "", html, flags=re.S))))
+        print(f"Rendered {a.email} for {who} ({note}) → {path}")
+        print("  " + text.strip()[:600])
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", choices=["mock", "live"], default=argparse.SUPPRESS)
@@ -389,6 +539,22 @@ def main(argv: list[str] | None = None) -> int:
     y = au.add_parser("report", help="self-contained HTML audit report")
     y.add_argument("--stale-days", type=int, default=365)
 
+    x = sub.add_parser("sql", help="SFMC SQL: lint, explain, run safely")
+    sq = x.add_subparsers(dest="sql_cmd", required=True)
+    y = sq.add_parser("lint", help="SFMC rules + (live) SFMC's own validator"); y.add_argument("sql")
+    y.add_argument("--target", help="target DE to check columns/PK against"); y.add_argument("--no-validate", action="store_true")
+    y = sq.add_parser("explain", help="sources, joins, filters, outputs"); y.add_argument("sql")
+    y = sq.add_parser("run", help="run a SELECT and show rows (live: temporary scratch DE, cleaned up)")
+    y.add_argument("sql"); y.add_argument("--top", type=int, default=50); y.add_argument("--keep", action="store_true")
+    y.add_argument("--timeout", type=int, default=900)
+    x = sub.add_parser("amp", help="AMPscript / SSJS: lint, render")
+    am = x.add_subparsers(dest="amp_cmd", required=True)
+    y = am.add_parser("lint", help="lint a file or an email/block/page from the inventory"); y.add_argument("source")
+    y.add_argument("--de", help="sendable DE whose fields AttributeValue() should match")
+    y = am.add_parser("render", help="render an email for one DE row (live: SFMC server-side preview)")
+    y.add_argument("email", help="email customer key"); y.add_argument("--de", required=True)
+    y.add_argument("--key", help="SubscriberKey"); y.add_argument("--row", type=int)
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -398,7 +564,8 @@ def main(argv: list[str] | None = None) -> int:
         {"auth-test": cmd_auth_test, "de": cmd_de, "seed": cmd_seed, "build": cmd_build,
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
-         "brief": cmd_brief, "cloudpage": cmd_cloudpage, "audit": cmd_audit}[a.cmd](a, be)
+         "brief": cmd_brief, "cloudpage": cmd_cloudpage, "audit": cmd_audit, "sql": cmd_sql,
+         "amp": cmd_amp}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

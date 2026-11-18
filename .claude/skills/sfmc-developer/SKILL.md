@@ -35,3 +35,37 @@ Limits to state when relevant:
 - Field usage comes from text matching.
 
 When reporting findings, group them by severity, explain the likely cause in a sentence, and suggest a fix. Don't apply the fix unless asked. Offer the HTML report when the user wants something to share.
+
+## 2. SQL, AMPscript and SSJS development
+Write code, then **lint before you hand it over**. Run `audit sync` first so DE and field checks work.
+
+| Task | Command |
+|---|---|
+| Check a query (SFMC rules + SFMC's own validator) | `--mode live sql lint <file\|"SQL"> [--target <DE>]` |
+| Explain a query (sources, joins, filters, outputs) | `sql explain <file\|"SQL">`, then describe it in plain English |
+| See what a SELECT returns | `--mode live sql run <file\|"SQL"> --top 50` |
+| Check AMPscript / SSJS (file, or an email/block/page by name) | `--mode live amp lint <file\|name> [--de <sendable DE>]` |
+| See an email rendered for a real subscriber | `--mode live amp render <email key> --de <DE> --key <SubscriberKey>` |
+
+**SQL rules to write by:**
+- One `SELECT` per query, with no variables, temp tables or `SELECT INTO`.
+- Name every expression column.
+- Use `ORDER BY` only together with `TOP`.
+- List columns explicitly. `SELECT *` fails when there's a JOIN.
+- Dedupe to the target's primary key with `ROW_NUMBER() OVER (PARTITION BY …)`.
+- Filter event data views (`_Sent`, `_Open`, `_Click`, …) by date, keeping within about 6 months.
+- `GETDATE()` is US Central Standard Time (UTC-6, no daylight saving).
+
+**`sql run` in live mode:**
+- It creates a temporary DE, query and automation called `CK_Scratch_<hash>`, runs them (about 2 minutes, because SFMC queues the automation), shows the rows, and deletes all three.
+- It writes to the tenant temporarily, so say so and get the user's go-ahead before running it.
+- It refuses `SELECT *`.
+
+**AMPscript and SSJS rules:**
+- Compare with `==`, and use straight quotes.
+- Every DE and field name in `Lookup`/`Upsert…` calls must exist.
+- SSJS needs `Platform.Load("Core","1.1.1")` before using Core objects. It is ES3/5 only, so no `let`, `const`, arrow functions or template literals. Wrap writes in try/catch.
+
+**Reading results:**
+- `variable not set here` is informational. Variables often come from the template or from included blocks.
+- `amp render` uses SFMC's server-side preview, so personalization, lookups and the account's sender address are real. "verified" means the rendered email shows that subscriber's address.

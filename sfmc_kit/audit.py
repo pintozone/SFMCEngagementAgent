@@ -394,7 +394,8 @@ class AuditStore:
         """Find an object by key, name or id (case-insensitive), preferring DEs."""
         rows = self.db.execute(
             "SELECT * FROM inv_objects WHERE mid=? AND mode=? AND (lower(key)=lower(?) OR lower(name)=lower(?) OR id=?) "
-            "ORDER BY CASE type WHEN 'de' THEN 0 ELSE 1 END", (self.mid, self.mode, ref, ref, ref)).fetchall()
+            "ORDER BY CASE type WHEN 'de' THEN 0 WHEN 'page' THEN 2 ELSE 1 END",
+            (self.mid, self.mode, ref, ref, ref)).fetchall()
         return {**dict(rows[0]), "meta": json.loads(rows[0]["meta"] or "{}")} if rows else None
 
     def name_of(self, type_: str, key: str) -> str:
