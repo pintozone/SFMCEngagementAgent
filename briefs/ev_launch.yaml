@@ -1,0 +1,165 @@
+# Campaign brief: Aurora Volt X launch, inviting owners of older gas/hybrid vehicles to go electric.
+campaign:
+  name: "Volt X Launch: Upgrade to Electric"
+  code: EVLAUNCH
+  objective: >
+    Drive test-drive bookings for the new Volt X EV SUV among opted-in owners of 2021-or-older
+    non-EV Aurora vehicles who do not already own an EV.
+  brand:
+    name: AURORA MOTORS
+    primary_color: "#0B3D91"
+    accent_color: "#00A884"
+    website: https://www.example.com/aurora
+  kpis:
+    open_rate: 0.30
+    click_rate: 0.05
+    test_drive_requests: 150
+
+send:
+  send_classification: Default Commercial   # external key of the send classification in your BU
+
+audience:
+  update_type: Overwrite
+  de:
+    fields:
+      - {name: SubscriberKey,    type: Text, length: 50, pk: true}
+      - {name: EmailAddress,     type: EmailAddress, required: true}
+      - {name: FirstName,        type: Text, length: 50}
+      - {name: LastName,         type: Text, length: 50}
+      - {name: LoyaltyTier,      type: Text, length: 20}
+      - {name: CurrentModel,     type: Text, length: 50}
+      - {name: CurrentModelYear, type: Number}
+      - {name: ModelInterest,    type: Text, length: 50}
+      - {name: DealerID,         type: Text, length: 10}
+      - {name: DealerName,       type: Text, length: 100}
+      - {name: DealerCity,       type: Text, length: 50}
+      - {name: Region,           type: Text, length: 20}
+  # SFMC SQL (T-SQL subset). Runs as a Query Activity live and is translated for the mock tenant.
+  sql: |
+    SELECT x.SubscriberKey, x.EmailAddress, x.FirstName, x.LastName, x.LoyaltyTier,
+           x.CurrentModel, x.CurrentModelYear, x.ModelInterest, x.DealerID, x.DealerName, x.DealerCity, x.Region
+    FROM (
+      SELECT c.SubscriberKey, c.EmailAddress, c.FirstName, c.LastName, c.LoyaltyTier,
+             v.Model AS CurrentModel, v.ModelYear AS CurrentModelYear, c.ModelInterest,
+             d.DealerID, d.DealerName, d.City AS DealerCity, c.Region,
+             ROW_NUMBER() OVER (PARTITION BY c.SubscriberKey ORDER BY v.ModelYear DESC) AS rn
+      FROM [CK_Master_Customers] c
+      INNER JOIN [CK_Master_Vehicles] v ON v.SubscriberKey = c.SubscriberKey
+      LEFT JOIN [CK_Master_Dealers] d ON d.DealerID = c.PreferredDealerID
+      WHERE c.EmailOptIn = 1
+        AND v.IsCurrent = 1
+        AND v.Powertrain <> 'EV'
+        AND v.ModelYear <= 2021
+        AND NOT EXISTS (SELECT 1 FROM [CK_Master_Vehicles] ev
+                        WHERE ev.SubscriberKey = c.SubscriberKey AND ev.Powertrain = 'EV')
+    ) x
+    WHERE x.rn = 1
+
+data_extensions:
+  - name: TestDriveRequests        # becomes CK_EVLAUNCH_TestDriveRequests (e.g. fed by a CloudPage form)
+    fields:
+      - {name: RequestID,     type: Text, length: 36, pk: true}
+      - {name: SubscriberKey, type: Text, length: 50, required: true}
+      - {name: Model,         type: Text, length: 50, default: "Volt X"}
+      - {name: DealerID,      type: Text, length: 10}
+      - {name: PreferredDate, type: Date}
+      - {name: CreatedDate,   type: Date}
+
+emails:
+  - ref: teaser
+    name: "Volt X: Reveal"
+    subject: "%%=v(@FirstName)=%%, meet the all-electric Volt X"
+    preheader: "Up to 320 miles of range. Room for everyone."
+    template: hero_cta.html
+    blocks:
+      hero_image: https://placehold.co/600x300/0B3D91/FFFFFF/png?text=Volt+X
+      headline: "Your %%=v(@CurrentModel)=%% has a successor."
+      body: >
+        The Volt X is Aurora's first all-electric SUV: up to 320 miles of range, 10-80% charging in 18 minutes,
+        and three rows of quiet. As an Aurora owner, you get first access to test drives.
+      cta_text: "Explore Volt X"
+      cta_url: https://www.example.com/aurora/volt-x
+      cta_alias: "Explore Volt X"
+  - ref: teaser_resend
+    name: "Volt X: Reveal (resend)"
+    subject: "In case you missed it: the Volt X is here"
+    preheader: "Aurora's first electric SUV is ready for a test drive."
+    template: hero_cta.html
+    blocks:
+      hero_image: https://placehold.co/600x300/0B3D91/FFFFFF/png?text=Volt+X
+      headline: "Electric, without compromise."
+      body: >
+        320 miles of range, seating for seven and Aurora's 8-year battery warranty. See why owners are
+        trading up from their %%=v(@CurrentModel)=%%.
+      cta_text: "See the Volt X"
+      cta_url: https://www.example.com/aurora/volt-x
+      cta_alias: "See Volt X"
+  - ref: testdrive_invite
+    name: "Volt X: Test Drive Invite"
+    subject: "Your Volt X test drive is waiting at %%=v(@DealerName)=%%"
+    preheader: "Pick a time that works. It takes 2 minutes."
+    template: hero_cta.html
+    blocks:
+      hero_image: https://placehold.co/600x300/00A884/FFFFFF/png?text=Book+a+Test+Drive
+      headline: "Feel the difference in 30 minutes."
+      body: >
+        Book a no-pressure test drive at your preferred dealer. We'll have a fully charged Volt X ready,
+        plus a trade-in estimate for your %%=v(@CurrentModel)=%%.
+      cta_text: "Book my test drive"
+      cta_url: https://www.example.com/aurora/test-drive?model=volt-x
+      cta_alias: "Book test drive"
+      footnote: "Valid driver's license required. Test drives subject to availability."
+  - ref: loyalty_offer
+    name: "Volt X: Loyalty Offer"
+    subject: "An owner-only offer on the Volt X"
+    preheader: "$2,500 loyalty bonus plus free home charger installation."
+    template: hero_cta.html
+    blocks:
+      hero_image: https://placehold.co/600x300/111827/FFFFFF/png?text=Owner+Offer
+      headline: "$2,500 loyalty bonus + free home charging."
+      body: >
+        Because you already drive Aurora, upgrade to a Volt X with a $2,500 loyalty bonus and a Level 2
+        home charger installed at no cost.
+      cta_text: "Claim my offer"
+      cta_url: https://www.example.com/aurora/offers/volt-x-loyalty
+      cta_alias: "Claim offer"
+      footnote: "Sample offer for demonstration. Terms, eligibility and expiry would appear here."
+  - ref: last_chance
+    name: "Volt X: Last Chance"
+    subject: "Last chance: Volt X launch test-drive slots"
+    preheader: "Launch week slots are almost gone."
+    template: hero_cta.html
+    blocks:
+      hero_image: https://placehold.co/600x300/00A884/FFFFFF/png?text=Last+Chance
+      headline: "Launch-week slots are nearly full."
+      body: "Reserve one of the remaining Volt X launch test drives near you."
+      cta_text: "Reserve a slot"
+      cta_url: https://www.example.com/aurora/test-drive?model=volt-x&src=lastchance
+      cta_alias: "Reserve slot"
+
+journey:
+  name: "CK_EVLAUNCH Volt X Launch"
+  entry:
+    type: data_extension                 # or api_event
+    entry_mode: SingleEntryAcrossAllVersions
+  steps:
+    - email: teaser
+    - wait: {days: 3}
+    - decision:
+        on: opened
+        email: teaser
+        yes:
+          - email: testdrive_invite
+          - wait: {days: 4}
+          - decision:
+              on: clicked
+              email: testdrive_invite
+              yes:
+                - wait: {days: 2}
+                - email: loyalty_offer
+              no:
+                - email: last_chance
+        no:
+          - email: teaser_resend
+          - wait: {days: 3}
+          - email: testdrive_invite

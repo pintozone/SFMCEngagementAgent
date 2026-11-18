@@ -1,0 +1,12 @@
+# Smoke-test DE for the first live round-trip: `de create` then `de load` / `de rows`.
+key: CK_Smoke_Test
+name: CK_Smoke_Test
+folder: CampaignKit/Smoke
+sendable: true
+fields:
+  - {name: SubscriberKey, type: Text, length: 50, pk: true}
+  - {name: EmailAddress,  type: EmailAddress, required: true}
+  - {name: FirstName,     type: Text, length: 50}
+  - {name: Model,         type: Text, length: 50}
+  - {name: OptIn,         type: Boolean}
+  - {name: Joined,        type: Date}

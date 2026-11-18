@@ -1,0 +1,3 @@
+SubscriberKey,EmailAddress,FirstName,Model,OptIn,Joined
+SMOKE-1,smoke.one@example.com,Ana,Volt X,true,2026-11-01
+SMOKE-2,smoke.two@example.com,Ben,Ridge,false,2026-10-15

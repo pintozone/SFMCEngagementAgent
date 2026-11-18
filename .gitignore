@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.db
+data/sample/
+data/previews/
+data/manifests/

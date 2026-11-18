@@ -1,0 +1,94 @@
+# Campaign brief: service-due reminder for owners whose last completed service was over 7 months ago.
+campaign:
+  name: "Service Due Reminder"
+  code: SERVICEDUE
+  objective: "Recover lapsed service visits: owners with no completed service in 7+ months."
+  brand:
+    name: AURORA MOTORS
+    primary_color: "#0B3D91"
+    accent_color: "#E85D04"
+    website: https://www.example.com/aurora
+  kpis: {open_rate: 0.35, click_rate: 0.08, bookings: 300}
+
+send:
+  send_classification: Default Commercial
+
+audience:
+  update_type: Overwrite
+  de:
+    fields:
+      - {name: SubscriberKey,   type: Text, length: 50, pk: true}
+      - {name: VIN,             type: Text, length: 17}
+      - {name: EmailAddress,    type: EmailAddress, required: true}
+      - {name: FirstName,       type: Text, length: 50}
+      - {name: Model,           type: Text, length: 50}
+      - {name: ModelYear,       type: Number}
+      - {name: Mileage,         type: Number}
+      - {name: LastServiceDate, type: Date}
+      - {name: DealerID,        type: Text, length: 10}
+      - {name: DealerName,      type: Text, length: 100}
+      - {name: LoyaltyTier,     type: Text, length: 20}
+  sql: |
+    SELECT x.SubscriberKey, x.VIN, x.EmailAddress, x.FirstName, x.Model, x.ModelYear, x.Mileage,
+           x.LastServiceDate, x.DealerID, x.DealerName, x.LoyaltyTier
+    FROM (
+      SELECT c.SubscriberKey, v.VIN, c.EmailAddress, c.FirstName, v.Model, v.ModelYear, v.Mileage,
+             c.LastServiceDate, d.DealerID, d.DealerName, c.LoyaltyTier,
+             ROW_NUMBER() OVER (PARTITION BY c.SubscriberKey ORDER BY v.Mileage DESC) AS rn
+      FROM [CK_Master_Customers] c
+      INNER JOIN [CK_Master_Vehicles] v ON v.SubscriberKey = c.SubscriberKey
+      LEFT JOIN [CK_Master_Dealers] d ON d.DealerID = c.PreferredDealerID
+      WHERE c.EmailOptIn = 1
+        AND v.IsCurrent = 1
+        AND c.LastServiceDate IS NOT NULL
+        AND c.LastServiceDate < DATEADD(MONTH, -7, GETDATE())
+    ) x
+    WHERE x.rn = 1
+
+data_extensions:
+  - name: ServiceBookings
+    fields:
+      - {name: BookingID,     type: Text, length: 36, pk: true}
+      - {name: SubscriberKey, type: Text, length: 50, required: true}
+      - {name: VIN,           type: Text, length: 17}
+      - {name: DealerID,      type: Text, length: 10}
+      - {name: SlotDate,      type: Date}
+      - {name: ServiceType,   type: Text, length: 50}
+
+emails:
+  - ref: due
+    name: "Service: Due Now"
+    subject: "%%=v(@FirstName)=%%, your Aurora %%=v(@Model)=%% is due for service"
+    preheader: "Book online in under a minute. Complimentary multi-point inspection."
+    template: service_reminder.html
+    blocks:
+      headline: "Time for a check-up"
+      body: "our records show your vehicle hasn't been serviced in a while. Keep it running like new."
+      cta_text: "Book service"
+      cta_url: https://www.example.com/aurora/service/book
+      cta_alias: "Book service"
+      footnote: "Complimentary inspection with any paid service. Sample content."
+  - ref: reminder
+    name: "Service: Reminder + 15% off"
+    subject: "15% off your next Aurora service"
+    preheader: "A thank-you for keeping your Aurora on the road."
+    template: service_reminder.html
+    blocks:
+      headline: "Take 15% off your next service"
+      body: "here's 15% off parts and labor when you book in the next 14 days."
+      cta_text: "Book with 15% off"
+      cta_url: https://www.example.com/aurora/service/book?offer=SVC15
+      cta_alias: "Book with offer"
+
+journey:
+  name: "CK_SERVICEDUE Service Due Reminder"
+  entry: {type: data_extension, entry_mode: MultipleEntries}
+  steps:
+    - email: due
+    - wait: {days: 5}
+    - decision:
+        on: clicked
+        email: due
+        yes: []
+        no:
+          - email: reminder
