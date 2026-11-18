@@ -37,6 +37,13 @@ Default everything else and state your defaults when you show the brief. For exa
   - Personalize only through the template's `@variables`, as `%%=v(@FirstName)=%%`.
   - Offers need `terms`. Mark them as sample/demo content, because this is a sample brand.
 
+### Booking page (when the user wants customers to book test drives)
+- Add a `cloudpage:` section (`type: test_drive_booking`, `models`, `default_model`, `headline`, `intro`, `fallback_url`; optional `time_slots`, `expect`, `button_text`, `max_days_ahead`). Then set `cta_url: "{{cloudpage_url}}"` on the emails that should open it. `briefs/ev_launch.yaml` is the model.
+- Include `DealerID`, `FirstName`, `LastName` and `EmailAddress` in the audience DE where possible, so the form pre-fills.
+- Bookings land in `CK_<CODE>_TestDriveBookings`. The page body is the HTML block `CK_<CODE>_CP_TestDriveBooking`.
+- Publishing a CloudPage is a one-time UI step that only the user can do. Give them the output of `python -m sfmc_kit cloudpage stub <brief>` and the README steps. When they send the page ID, set `cloudpage.page_id` and rebuild. Until then the emails use `fallback_url`.
+- Rehearse with `cloudpage preview <brief>`, and show the user the preview file. In mock mode, `analytics` adds Bookings and the click-to-booking rate.
+
 ## 4. Check until clean
 `python -m sfmc_kit brief check briefs/<file>.yaml`. It validates the schema, template blocks, copy lengths, personalization and links, and runs the audience SQL against the mock tenant (count, PK duplicates, missing emails, unknown columns). Fix every `ERROR`. Fix `WARN` lines unless there's a reason not to, and if you leave one, say why. Repeat until it prints `OK`.
 

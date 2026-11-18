@@ -17,6 +17,7 @@ from .client.sqlxlate import translate
 from .config import TEMPLATE_DIR
 from .db import mock_db_path
 from .modules.assets import render_template
+from .modules.cloudpages import render_page, resolve_blocks
 from .sampledata.generator import master_de_specs
 
 SUBJECT_MAX = 60
@@ -128,8 +129,9 @@ def check_brief(path: str | Path, db_path: Path | None = None) -> CheckResult:
                 res.errors.append(f"{ctx}: personalization %%{s}%% is not a field of the audience DE")
 
         if not missing and not miss_brand:
+            blocks = resolve_blocks(e.blocks, brief.cloudpage, brief.code)
             try:
-                html = render_template(e.template, e.blocks, brief.brand)
+                html = render_template(e.template, blocks, brief.brand)
             except KeyError as err:
                 res.errors.append(f"{ctx}: {err}")
                 continue
@@ -138,8 +140,25 @@ def check_brief(path: str | Path, db_path: Path | None = None) -> CheckResult:
                 if href and href.group(1).startswith("http") and "alias=" not in tag:
                     res.warnings.append(f"{ctx}: link {href.group(1)[:60]} has no alias (tracking reads poorly)")
             urls = [u for u in re.findall(r'href="(http[^"]+)"', html)]
-            if not any(e.blocks.get("cta_url", "") == u for u in urls) and "cta_url" in info.blocks:
+            cta = blocks.get("cta_url", "")
+            if cta.startswith("http") and cta not in urls and "cta_url" in info.blocks:
                 res.warnings.append(f"{ctx}: cta_url does not appear in the rendered email")
+
+    if brief.cloudpage:
+        cp = brief.cloudpage
+        try:
+            render_page(cp, brief.code, brief.prefix, brief.brand,
+                        [{"DealerID": "D001", "DealerName": "Sample", "City": "Detroit", "State": "MI"}])
+        except KeyError as err:
+            res.errors.append(f"cloudpage: {err}")
+        users = [e.ref for e in brief.emails if any("{{cloudpage_url}}" in v for v in e.blocks.values())]
+        if not users:
+            res.warnings.append("cloudpage is configured but no email links to it (use cta_url: \"{{cloudpage_url}}\")")
+        if not cp.page_id:
+            res.warnings.append(f"cloudpage.page_id not set yet: emails {users} will use {cp.fallback_url} until "
+                                "the CloudPage is published and its ID is added to the brief")
+        if "DealerID" not in {f.name for f in brief.audience_de.fields}:
+            res.warnings.append("audience DE has no DealerID: the booking form can't preselect the customer's dealer")
 
     _check_audience_sql(brief, res, db_path or mock_db_path())
     return res

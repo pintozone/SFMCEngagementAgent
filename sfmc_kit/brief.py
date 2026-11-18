@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from .modules.cloudpages import CLOUDPAGE_TOKEN, CloudPageBrief
 from .modules.data_extensions import DESpec
 
 
@@ -60,6 +61,7 @@ class Brief:
     entry_type: str
     entry_mode: str
     steps: list[dict]
+    cloudpage: CloudPageBrief | None = None
     source: Path | None = None
     raw: dict = field(default_factory=dict)
 
@@ -132,7 +134,16 @@ def parse_brief(raw: dict, source: Path | None = None) -> Brief:
     steps = _normalize_steps(_req(j, "steps", "journey"))
     _check_steps(steps, refs, sent=set())
 
+    try:
+        cloudpage = CloudPageBrief.from_dict(raw.get("cloudpage"))
+    except (TypeError, ValueError) as e:
+        raise BriefError(f"cloudpage: {e}") from e
+    users = [e.ref for e in emails if any(CLOUDPAGE_TOKEN in v for v in e.blocks.values())]
+    if users and not cloudpage:
+        raise BriefError(f"emails {users} use {CLOUDPAGE_TOKEN} but the brief has no cloudpage section")
+
     return Brief(
+        cloudpage=cloudpage,
         name=_req(c, "name", "campaign"), code=code, objective=c.get("objective", ""),
         brand=c.get("brand", {}) or {}, kpis=c.get("kpis", {}) or {},
         send_classification=(raw.get("send") or {}).get("send_classification", "Default Commercial"),

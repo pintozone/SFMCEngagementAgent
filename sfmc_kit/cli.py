@@ -221,6 +221,38 @@ def cmd_brief(a, be: Backend) -> None:
         raise SystemExit(1)
 
 
+def cmd_cloudpage(a, be: Backend) -> None:
+    from .modules import cloudpages as cpm
+    if a.cp_cmd == "bookings":
+        p = f"CK_{a.code.upper()}_"
+        rows = be.read_rows(f"{p}TestDriveBookings", max_rows=100000)
+        rows.sort(key=lambda r: str(r.get("CreatedDate")), reverse=True)
+        print(f"{len(rows)} booking(s) in {p}TestDriveBookings ({be.mode}); newest {min(a.limit, len(rows))}:")
+        table(rows, ["SubscriberKey", "FirstName", "LastName", "Model", "DealerID", "PreferredDate",
+                     "PreferredTime", "Status", "CreatedDate"], limit=a.limit)
+        return
+    brief = load_brief(a.brief)
+    if not brief.cloudpage:
+        raise BriefError(f"{a.brief} has no cloudpage section")
+    p = brief.prefix
+    if a.cp_cmd == "stub":
+        print(f"Paste this single line as the content of a new CloudPage, then publish it:\n\n  {cpm.page_stub(p)}\n")
+        print(f"Then set cloudpage.page_id in {a.brief} to the page's ID and rebuild, so emails link to it.")
+        return
+    dealers = be.read_rows("CK_Master_Dealers", max_rows=2500) if be.get_de("CK_Master_Dealers") else []
+    html = cpm.render_page(brief.cloudpage, brief.code, p, brief.brand, dealers)
+    rows = be.read_rows(brief.audience_de.key, max_rows=1) if be.get_de(brief.audience_de.key) else []
+    sample = {**(rows[0] if rows else {"FirstName": "Alex", "EmailAddress": "alex@example.com"}),
+              "Model": brief.cloudpage.default_model}
+    out = DATA_DIR / "previews"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{brief.code}_cloudpage.ampscript.html").write_text(html)
+    path = out / f"{brief.code}_cloudpage.html"
+    path.write_text(cpm.preview_page(html, sample))
+    print(f"  {path}  (static preview, pre-filled for {sample.get('FirstName')})")
+    print(f"  {out / f'{brief.code}_cloudpage.ampscript.html'}  (exact page body sent to SFMC)")
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", choices=["mock", "live"], default=argparse.SUPPRESS)
@@ -273,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     y = bs.add_parser("check", help="validate a brief and dry-run its audience SQL in the mock tenant")
     y.add_argument("brief")
 
+    x = sub.add_parser("cloudpage", help="test-drive booking CloudPage tools")
+    cs = x.add_subparsers(dest="cp_cmd", required=True)
+    y = cs.add_parser("preview", help="render the booking page locally"); y.add_argument("brief")
+    y = cs.add_parser("stub", help="print the one line to paste into the CloudPage"); y.add_argument("brief")
+    y = cs.add_parser("bookings", help="list submitted bookings"); y.add_argument("code")
+    y.add_argument("--limit", type=int, default=50)
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -282,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         {"auth-test": cmd_auth_test, "de": cmd_de, "seed": cmd_seed, "build": cmd_build,
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
-         "brief": cmd_brief}[a.cmd](a, be)
+         "brief": cmd_brief, "cloudpage": cmd_cloudpage}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

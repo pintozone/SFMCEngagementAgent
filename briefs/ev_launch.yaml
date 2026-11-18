@@ -55,15 +55,18 @@ audience:
     ) x
     WHERE x.rn = 1
 
-data_extensions:
-  - name: TestDriveRequests        # becomes CK_EVLAUNCH_TestDriveRequests (e.g. fed by a CloudPage form)
-    fields:
-      - {name: RequestID,     type: Text, length: 36, pk: true}
-      - {name: SubscriberKey, type: Text, length: 50, required: true}
-      - {name: Model,         type: Text, length: 50, default: "Volt X"}
-      - {name: DealerID,      type: Text, length: 10}
-      - {name: PreferredDate, type: Date}
-      - {name: CreatedDate,   type: Date}
+# Styled test-drive booking page. Submissions land in CK_EVLAUNCH_TestDriveBookings.
+cloudpage:
+  type: test_drive_booking
+  page_id:                  # set after the one-time publish (python -m sfmc_kit cloudpage stub briefs/ev_launch.yaml)
+  models: [Volt X, Pulse]
+  default_model: Volt X
+  headline: "Book your Volt X test drive"
+  intro: >
+    Choose a model, your dealer and a time that suits you. We'll have a fully charged car ready
+    and call you to confirm.
+  button_text: "Request my test drive"
+  fallback_url: https://www.example.com/aurora/test-drive?model=volt-x
 
 emails:
   - ref: teaser
@@ -106,7 +109,7 @@ emails:
         Book a no-pressure test drive at your preferred dealer. We'll have a fully charged Volt X ready,
         plus a trade-in estimate for your %%=v(@CurrentModel)=%%.
       cta_text: "Book my test drive"
-      cta_url: https://www.example.com/aurora/test-drive?model=volt-x
+      cta_url: "{{cloudpage_url}}"
       cta_alias: "Book test drive"
       footnote: "Valid driver's license required. Test drives subject to availability."
   - ref: loyalty_offer
@@ -134,7 +137,7 @@ emails:
       headline: "Launch-week slots are nearly full."
       body: "Reserve one of the remaining Volt X launch test drives near you."
       cta_text: "Reserve a slot"
-      cta_url: https://www.example.com/aurora/test-drive?model=volt-x&src=lastchance
+      cta_url: "{{cloudpage_url}}"
       cta_alias: "Reserve slot"
 
 journey:

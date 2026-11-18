@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<!-- cloudpage: Test-drive booking form. Pre-fills from CloudPagesURL parameters (SubscriberKey, FirstName,
+     LastName, EmailAddress, DealerID, Model, Campaign), validates server-side, and UpsertData()s one row per
+     SubscriberKey + Model into the bookings DE. Double-brace tokens are filled at build time; AMPscript runs on the page. -->
+%%[
+VAR @submitted, @sk, @first, @last, @email, @phone, @model, @dealer, @date, @time, @consent, @comments
+VAR @campaign, @errors, @done, @dateok, @days, @dealerName, @firstH, @lastH, @emailH, @phoneH, @commentsH
+
+SET @submitted = RequestParameter("cp_submit")
+SET @campaign  = RequestParameter("Campaign")
+IF Empty(@campaign) THEN SET @campaign = "{{ campaign_code }}" ENDIF
+SET @sk        = RequestParameter("SubscriberKey")
+SET @first     = Trim(RequestParameter("FirstName"))
+SET @last      = Trim(RequestParameter("LastName"))
+SET @email     = Trim(RequestParameter("EmailAddress"))
+SET @phone     = Trim(RequestParameter("Phone"))
+SET @model     = RequestParameter("Model")
+IF IndexOf("|{{ models_pipe }}|", Concat("|", @model, "|")) == 0 THEN SET @model = "{{ default_model }}" ENDIF
+SET @dealer    = RequestParameter("DealerID")
+SET @date      = RequestParameter("PreferredDate")
+SET @time      = RequestParameter("PreferredTime")
+SET @consent   = RequestParameter("Consent")
+SET @comments  = Trim(RequestParameter("Comments"))
+SET @errors    = ""
+SET @done      = "false"
+
+IF @submitted == "1" THEN
+  IF Empty(@first) OR Empty(@last) THEN SET @errors = Concat(@errors, "<li>Please enter your first and last name.</li>") ENDIF
+  IF Empty(@email) THEN
+    SET @errors = Concat(@errors, "<li>Please enter your email address.</li>")
+  ELSEIF NOT IsEmailAddress(@email) THEN
+    SET @errors = Concat(@errors, "<li>Please enter a valid email address.</li>")
+  ENDIF
+  IF Empty(@phone) THEN SET @errors = Concat(@errors, "<li>Please enter a phone number so the dealer can confirm.</li>") ENDIF
+  IF Empty(Lookup("{{ dealers_de }}", "DealerID", "DealerID", @dealer)) THEN
+    SET @errors = Concat(@errors, "<li>Please choose a dealer.</li>")
+  ENDIF
+  IF IndexOf("|{{ slots_pipe }}|", Concat("|", @time, "|")) == 0 THEN SET @errors = Concat(@errors, "<li>Please choose a time of day.</li>") ENDIF
+  SET @dateok = RegExMatch(@date, "^\d{4}-\d{2}-\d{2}$", 0)
+  IF Empty(@dateok) THEN
+    SET @errors = Concat(@errors, "<li>Please choose a date.</li>")
+  ELSE
+    SET @days = DateDiff(Now(), @date, "D")
+    IF @days < 1 OR @days > {{ max_days_ahead }} THEN
+      SET @errors = Concat(@errors, "<li>Please choose a date between tomorrow and {{ max_days_ahead }} days from now.</li>")
+    ENDIF
+  ENDIF
+  IF @consent != "yes" THEN SET @errors = Concat(@errors, "<li>Please agree to be contacted about your test drive.</li>") ENDIF
+
+  IF Empty(@errors) THEN
+    IF Empty(@sk) THEN SET @sk = Concat("WEB-", GUID()) ENDIF
+    UpsertData("{{ bookings_de }}", 2, "SubscriberKey", @sk, "Model", @model,
+      "BookingID", GUID(), "FirstName", Substring(@first, 1, 50), "LastName", Substring(@last, 1, 50),
+      "EmailAddress", @email, "Phone", Substring(@phone, 1, 30), "DealerID", @dealer,
+      "PreferredDate", @date, "PreferredTime", @time, "Comments", Substring(@comments, 1, 500),
+      "ConsentToContact", "true", "Status", "Requested", "Source", "CloudPage", "Campaign", @campaign,
+      "CreatedDate", Now())
+    SET @done = "true"
+    SET @dealerName = Lookup("{{ dealers_de }}", "DealerName", "DealerID", @dealer)
+  ENDIF
+ENDIF
+
+/* HTML-escape everything echoed back into the page */
+SET @firstH    = Replace(Replace(Replace(Replace(@first, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @lastH     = Replace(Replace(Replace(Replace(@last, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @emailH    = Replace(Replace(Replace(Replace(@email, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @phoneH    = Replace(Replace(Replace(Replace(@phone, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+SET @commentsH = Replace(Replace(Replace(Replace(@comments, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), '"', "&quot;")
+]%%
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ headline }} | {{ brand_name }}</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --primary: {{ brand_primary_color }}; --accent: {{ brand_accent_color }}; --ink: #111827; --muted: #6b7280; --line: #e5e7eb; --bg: #f3f5f9; --err: #b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; }
+  header { background: var(--primary); color: #fff; padding: 18px 24px; }
+  header a { color: #fff; text-decoration: none; font-weight: 700; letter-spacing: 3px; }
+  .hero { background: linear-gradient(135deg, var(--primary), #061d47); color: #fff; padding: 40px 24px 72px; }
+  .hero .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  .hero h1 { margin: 0 0 8px; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; }
+  .hero p { margin: 0; max-width: 620px; opacity: .9; font-size: 17px; }
+  main { max-width: 960px; margin: -48px auto 48px; padding: 0 16px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 8px 24px rgba(15, 23, 42, .08); padding: 28px; }
+  h2 { margin: 0 0 16px; font-size: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  input, select, textarea { width: 100%; font: inherit; padding: 11px 12px; border: 1px solid #cbd2dc; border-radius: 8px; background: #fff; color: var(--ink); }
+  input:focus, select:focus, textarea:focus { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+  .models { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .model { position: relative; }
+  .model input { position: absolute; opacity: 0; }
+  .model span { display: block; border: 2px solid var(--line); border-radius: 10px; padding: 14px; text-align: center; font-weight: 700; cursor: pointer; }
+  .model input:checked + span { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, #fff); }
+  .model input:focus-visible + span { outline: 3px solid var(--accent); }
+  .consent { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--muted); }
+  .consent input { width: auto; margin-top: 3px; }
+  button { margin-top: 20px; width: 100%; border: 0; border-radius: 8px; padding: 14px; font: inherit; font-weight: 700; font-size: 16px; color: #fff; background: var(--accent); cursor: pointer; }
+  button:hover { filter: brightness(.95); }
+  .errors { border: 1px solid #fecaca; background: #fef2f2; color: var(--err); border-radius: 8px; padding: 12px 16px; margin-bottom: 18px; }
+  .errors ul { margin: 6px 0 0; padding-left: 18px; }
+  .side { align-self: start; }
+  .side h3 { margin: 0 0 8px; font-size: 16px; }
+  .side ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  .side li { margin-bottom: 6px; }
+  .done { text-align: center; padding: 40px 28px; }
+  .tick { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-grid; place-items: center; font-size: 30px; margin-bottom: 12px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 32px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header><a href="{{ brand_website }}">{{ brand_name }}</a></header>
+<section class="hero"><div class="wrap">
+  <h1>{{ headline }}</h1>
+  <p>{{ intro }}</p>
+</div></section>
+<main>
+%%[ IF @done == "true" THEN ]%%
+  <section class="card done full" style="grid-column:1/-1">
+    <div class="tick" aria-hidden="true">✓</div>
+    <h2>You're booked in, %%=v(@firstH)=%%.</h2>
+    <p>We've sent your %%=v(@model)=%% test-drive request to <strong>%%=v(@dealerName)=%%</strong> for
+       %%=FormatDate(@date, "dddd, MMMM d")=%% (%%=v(@time)=%%). They'll call %%=v(@phoneH)=%% to confirm.</p>
+    <p><a href="{{ brand_website }}" style="color:{{ brand_primary_color }};font-weight:700;">Back to {{ brand_name }}</a></p>
+  </section>
+%%[ ELSE ]%%
+  <section class="card">
+    <h2>Your details</h2>
+    %%[ IF NOT Empty(@errors) THEN ]%%
+      <div class="errors" role="alert"><strong>Please check the form:</strong><ul>%%=v(@errors)=%%</ul></div>
+    %%[ ENDIF ]%%
+    <form method="post" action="%%=RequestParameter('PAGEURL')=%%" novalidate>
+      <input type="hidden" name="cp_submit" value="1">
+      <div class="grid">
+        <div class="full">
+          <label>Model</label>
+          <div class="models">
+{{ model_options }}
+          </div>
+        </div>
+        <div><label for="FirstName">First name</label><input id="FirstName" name="FirstName" autocomplete="given-name" maxlength="50" value="%%=v(@firstH)=%%" required></div>
+        <div><label for="LastName">Last name</label><input id="LastName" name="LastName" autocomplete="family-name" maxlength="50" value="%%=v(@lastH)=%%" required></div>
+        <div><label for="EmailAddress">Email</label><input id="EmailAddress" name="EmailAddress" type="email" autocomplete="email" maxlength="254" value="%%=v(@emailH)=%%" required></div>
+        <div><label for="Phone">Phone</label><input id="Phone" name="Phone" type="tel" autocomplete="tel" maxlength="30" value="%%=v(@phoneH)=%%" required></div>
+        <div class="full">
+          <label for="DealerID">Dealer</label>
+          <select id="DealerID" name="DealerID" required>
+            <option value="">Choose a dealer…</option>
+{{ dealer_options }}
+          </select>
+        </div>
+        <div><label for="PreferredDate">Preferred date</label><input id="PreferredDate" name="PreferredDate" type="date" value="%%=v(@date)=%%" required></div>
+        <div>
+          <label for="PreferredTime">Time of day</label>
+          <select id="PreferredTime" name="PreferredTime" required>
+{{ slot_options }}
+          </select>
+        </div>
+        <div class="full"><label for="Comments">Anything we should know? (optional)</label><textarea id="Comments" name="Comments" rows="3" maxlength="500">%%=v(@commentsH)=%%</textarea></div>
+        <div class="full consent"><input id="Consent" name="Consent" type="checkbox" value="yes" %%=IIF(@consent == "yes", "checked", "")=%%><label for="Consent" style="font-weight:400">{{ consent_text }}</label></div>
+      </div>
+      <button type="submit">{{ button_text }}</button>
+    </form>
+  </section>
+  <aside class="card side">
+    <h3>What to expect</h3>
+    <ul>
+{{ expect_items }}
+    </ul>
+  </aside>
+%%[ ENDIF ]%%
+</main>
+<footer>{{ footer_text }}</footer>
+</body>
+</html>

@@ -184,6 +184,18 @@ class LiveBackend(Backend):
             legacy = ((self._find_asset(spec.key) or {}).get("legacyData") or {}).get("legacyId")
         return {"id": res["id"], "key": spec.key, "legacy_id": legacy, "created": created}
 
+    def upsert_block(self, key: str, name: str, html: str, folder: str) -> dict:
+        """Content Builder HTML block (used as a CloudPage body via ContentBlockByKey)."""
+        from ..modules.cloudpages import HTML_BLOCK_ASSET_TYPE
+        payload = {"name": name, "customerKey": key, "assetType": HTML_BLOCK_ASSET_TYPE, "content": html,
+                   "category": {"id": self.ensure_folder("asset", folder)}}
+        existing = self._find_asset(key)
+        if existing:
+            res = self.rest.patch(f"/asset/v1/content/assets/{existing['id']}", payload)
+            return {"id": res["id"], "key": key, "created": False}
+        res = self.rest.post("/asset/v1/content/assets", payload)
+        return {"id": res["id"], "key": key, "created": True}
+
     def delete_asset(self, asset_id: Any) -> None:
         self.rest.delete(f"/asset/v1/content/assets/{asset_id}", allow_404=True)
 

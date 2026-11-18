@@ -10,6 +10,7 @@ from .client.base import Backend
 from .config import DATA_DIR
 from .db import Sandbox
 from .modules import analytics as an
+from .modules import cloudpages as cpm
 from .modules.assets import EmailSpec, render_template
 from .modules.automation import AutomationSpec, QuerySpec
 from .modules.journey import EntrySpec, JourneyBuilder, event_definition_payload, journey_payload
@@ -26,6 +27,12 @@ def plan(brief: Brief) -> list[str]:
     steps += [f"DE  {d.key}" for d in [brief.audience_de, *brief.extra_des]]
     steps += [f"SQL {p}Q_BuildAudience -> {brief.audience_de.key} ({brief.audience_update_type})",
               f"AUT {p}AUTO_Audience  (runs the audience query once)"]
+    if brief.cloudpage:
+        cp = brief.cloudpage
+        steps += [f"DE  {p}TestDriveBookings  (CloudPage form submissions)",
+                  f"CPG {cpm.block_key(p)}  (booking page body, models: {', '.join(cp.models)})",
+                  "    emails link to " + (f"CloudPage {cp.page_id} (CloudPagesURL)" if cp.page_id
+                                             else f"fallback {cp.fallback_url} (set cloudpage.page_id after publishing)")]
     steps += [f"EML {p}EM_{e.ref}  '{e.subject}'  [{e.template}]" for e in brief.emails]
     steps += [f"EVT {p}EV_Entry  ({brief.entry_type} on {brief.audience_de.key})",
               f"JRN {brief.journey_name}  ({_count_steps(brief.steps)} activities, draft)",
@@ -108,10 +115,14 @@ class Builder:
             if audience_count == 0:
                 self.log("  ! audience is empty; check the audience SQL")
 
+        if brief.cloudpage:
+            self._build_cloudpage(brief, camp)
+
         self.log("[4/7] Email assets (Content Builder)")
         email_meta: dict[str, dict] = {}
         for e in brief.emails:
-            html = render_template(e.template, e.blocks, brief.brand)
+            html = render_template(e.template, cpm.resolve_blocks(e.blocks, brief.cloudpage, brief.code),
+                                   brief.brand)
             spec = EmailSpec(key=f"{p}EM_{e.ref}", name=f"{p}EM_{e.ref}", subject=e.subject, preheader=e.preheader,
                              html=html, folder=f"CampaignKit/{brief.code}")
             res = self.be.upsert_email(spec)
@@ -152,6 +163,8 @@ class Builder:
             self.log(f"  → journey publish: {published}")
             self.sb.record(brief.code, self.be.mode, "journey", payload["key"], brief.journey_name, jres["id"],
                            {"version": jres["version"], "status": published})
+            if brief.cloudpage and self.be.mode == "mock":
+                self._simulate_bookings(brief)
 
         self.log("[7/7] Analytics objects (Data Views -> report DEs)")
         ades, aqueries, aauto = an.analytics_objects(p, brief.journey_name)
@@ -179,6 +192,48 @@ class Builder:
         return manifest
 
 
+    # ------------------------------------------------------------------ CloudPage
+    def _build_cloudpage(self, brief: Brief, camp: tuple[str, str]) -> None:
+        cp, p = brief.cloudpage, brief.prefix
+        assert cp is not None
+        self.log("[+]   CloudPage: test-drive booking")
+        spec = cpm.bookings_de(p, brief.code)
+        de, created = self.be.ensure_de(spec)
+        self._rec(brief, "de", spec.key, spec.name, de["object_id"], created, sendable=True)
+        self._link(brief, camp, ("de", spec.key), "owns")
+        dealers_key = "CK_Master_Dealers"
+        if not self.be.get_de(dealers_key):
+            raise BuildError(f"{dealers_key} is missing in the {self.be.mode} tenant; the booking page lists "
+                             "dealers from it. Run `seed` first.")
+        dealers = self.be.read_rows(dealers_key, max_rows=2500)
+        html = cpm.render_page(cp, brief.code, p, brief.brand, dealers, dealers_key)
+        key = cpm.block_key(p)
+        res = self.be.upsert_block(key, key, html, f"CampaignKit/{brief.code}")
+        self._rec(brief, "block", key, key, res["id"], res["created"], page_id=cp.page_id)
+        self._link(brief, ("block", key), ("de", spec.key), "writes")
+        self._link(brief, ("de", dealers_key), ("block", key), "reads")
+        out = DATA_DIR / "previews"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{brief.code}_cloudpage.ampscript.html").write_text(html)
+        if cp.page_id:
+            self.log(f"  → emails link to CloudPage {cp.page_id} with personalized CloudPagesURL parameters")
+        else:
+            self.log("  ! one-time step: create a CloudPage, set its content to")
+            self.log(f"      {cpm.page_stub(p)}")
+            self.log("    publish it, then put its page ID in the brief as cloudpage.page_id and rebuild.")
+            self.log(f"    Until then, email buttons use {cp.fallback_url}")
+
+    def _simulate_bookings(self, brief: Brief) -> None:
+        cp = brief.cloudpage
+        assert cp is not None
+        clickers = self.be.journey_clickers(brief.journey_name, brief.audience_de.key)  # type: ignore[attr-defined]
+        dealers = self.be.read_rows("CK_Master_Dealers", max_rows=2500)
+        rows = cpm.simulate_bookings(clickers, cp, brief.code, dealers)
+        if rows:
+            self.be.upsert_rows(f"{brief.prefix}TestDriveBookings", rows, ["SubscriberKey", "Model"])
+        self.log(f"  → simulated {len(rows)} CloudPage bookings from {len(clickers)} clickers")
+
+
 def run_analytics(backend: Backend, sandbox: Sandbox, code: str, refresh: bool = True) -> dict:
     p = f"CK_{code}_"
     objs = {(o["type"], o["key"]): o for o in sandbox.objects(code, backend.mode)}
@@ -191,19 +246,26 @@ def run_analytics(backend: Backend, sandbox: Sandbox, code: str, refresh: bool =
     daily = backend.read_rows(f"{p}Analytics_Daily", max_rows=1000)
     daily.sort(key=lambda r: str(r.get("EventDay")))
     by_email.sort(key=lambda r: (str(r.get("FirstSend")), str(r.get("ActivityExternalKey"))))
-    return {"by_email": by_email, "daily": daily, "summary": an.summarize(by_email)}
+    summary = an.summarize(by_email)
+    bookings = None
+    if (("de", f"{p}TestDriveBookings")) in objs:
+        bookings = backend.read_rows(f"{p}TestDriveBookings", max_rows=100000)
+        summary["Bookings"] = len(bookings)
+        clicks = summary.get("UniqueClicks") or 0
+        summary["ClickToBooking"] = f"{100.0 * len(bookings) / clicks:.1f}%" if clicks else "n/a"
+    return {"by_email": by_email, "daily": daily, "summary": summary, "bookings": bookings}
 
 
 def teardown(backend: Backend, sandbox: Sandbox, code: str, log: Callable[[str], None] = print) -> int:
     objs = sandbox.objects(code, backend.mode)
-    order = ["journey", "eventdef", "automation", "query", "email", "de"]
+    order = ["journey", "eventdef", "automation", "query", "email", "block", "de"]
     n = 0
     for t in order:
         for o in [o for o in objs if o["type"] == t]:
             try:
                 {"journey": backend.delete_journey, "eventdef": backend.delete_event_definition,
                  "automation": backend.delete_automation, "query": backend.delete_query,
-                 "email": backend.delete_asset}.get(t, lambda _id: backend.delete_de(o["key"]))(o["sfmc_id"])
+                 "email": backend.delete_asset, "block": backend.delete_asset}.get(t, lambda _id: backend.delete_de(o["key"]))(o["sfmc_id"])
                 log(f"  ✗ deleted {t:<10} {o['key']}")
                 n += 1
             except Exception as e:  # keep going; report what failed

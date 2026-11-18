@@ -199,6 +199,11 @@ class MockBackend(Backend):
 
     def delete_asset(self, asset_id: Any) -> None:
         self._del("asset", asset_id)
+        self._del("block", asset_id)
+
+    def upsert_block(self, key: str, name: str, html: str, folder: str) -> dict:
+        bid, created = self._put("block", key, name, {"html": html, "folder_id": self.ensure_folder("asset", folder)})
+        return {"id": bid, "key": key, "created": created}
 
     # ------------------------------------------------------------------ automation
     def upsert_query(self, spec: QuerySpec) -> dict:
@@ -310,6 +315,19 @@ class MockBackend(Backend):
         if j:
             self._clear_tracking(j["name"])
         self._del("journey", journey_id)
+
+    def journey_clickers(self, journey_name: str, audience_key: str) -> list[dict]:
+        """First unique click per subscriber in a journey, joined to the audience row (mock only)."""
+        aud_name, _ = self._fields(audience_key)
+        rows = self.db.execute(f'''
+            SELECT a.*, MIN(c.EventDate) AS ClickDate
+            FROM "_Click" c
+            JOIN "_JourneyActivity" ja ON ja.JourneyActivityObjectID = c.TriggererSendDefinitionObjectID
+            JOIN "_Journey" j ON j.VersionID = ja.VersionID
+            JOIN "{aud_name}" a ON a.SubscriberKey = c.SubscriberKey
+            WHERE j.JourneyName = ? AND c.IsUnique = 1
+            GROUP BY c.SubscriberKey''', (journey_name,)).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------ send simulation
     def _clear_tracking(self, journey_name: str) -> None:

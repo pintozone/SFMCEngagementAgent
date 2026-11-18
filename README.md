@@ -96,6 +96,38 @@ Templates: `hero_cta.html` (launch/invite), `offer_card.html` (offer value, code
 `newsletter.html` (intro + 3 cards), `service_reminder.html` (vehicle/last-service box).
 Run `python -m sfmc_kit templates` for the blocks each one needs.
 
+## Test-drive booking CloudPage
+Add a `cloudpage:` section to a brief (see `briefs/ev_launch.yaml`) and set an email's `cta_url: "{{cloudpage_url}}"`.
+The build then creates:
+* **`CK_<CODE>_TestDriveBookings`** (sendable, PK SubscriberKey + Model): one row per booking, with name, email,
+  phone, dealer, preferred date and time, comments, consent, status, source, campaign and created date.
+* **`CK_<CODE>_CP_TestDriveBooking`**, a Content Builder HTML block holding the styled, mobile-friendly page.
+  Its AMPscript pre-fills the form from the email link and checks every field on the server (model and
+  time-slot whitelists, a real dealer from `CK_Master_Dealers`, valid email, a date from tomorrow up to
+  `max_days_ahead`, consent). It HTML-escapes anything echoed back, then `UpsertData`s the booking and shows
+  a confirmation.
+* **Email buttons** that link with `CloudPagesURL(page_id, …)`: encrypted parameters (SubscriberKey, name, email,
+  dealer, model, campaign) pre-fill the form.
+
+**One-time step in the UI** (publishing CloudPages isn't available on the public API):
+1. Run `python -m sfmc_kit cloudpage stub briefs/ev_launch.yaml` to print one line:
+   `%%=ContentBlockByKey("CK_EVLAUNCH_CP_TestDriveBooking")=%%`
+2. In **Web Studio → CloudPages**, open or create a collection, add a **Landing Page**, and choose a blank
+   layout. Add an **HTML** content block, paste the line, then **Publish**.
+3. Copy the page's **ID** (CloudPages → page → *Page ID*, or from the page URL details), set `cloudpage.page_id`
+   in the brief, and rebuild. The emails now link to the page.
+
+After that, design and logic changes only need a rebuild: the kit updates the block and the published page
+picks it up without re-publishing.
+
+```bash
+python -m sfmc_kit cloudpage preview briefs/ev_launch.yaml     # static preview + exact AMPscript body
+python -m sfmc_kit --mode live cloudpage bookings EVLAUNCH     # submitted bookings
+python -m sfmc_kit --mode live analytics EVLAUNCH              # KPIs incl. Bookings and click-to-booking rate
+```
+In mock mode, publishing the journey also simulates bookings from a share of email clickers
+(`cloudpage.booking_rate`), so analytics show the full send → open → click → booking funnel.
+
 ## Writing a brief
 See `briefs/ev_launch.yaml` (a 12-activity journey with nested open and click splits) and `briefs/service_reminder.yaml`.
 Journey steps:
