@@ -4,8 +4,8 @@ campaign:
   name: "Test-Drive to Order: Volt X & Pulse Offer"
   code: TDCONVERT
   objective: >
-    Convert customers who completed a test drive but have not ordered or contacted a dealer since,
-    with a time-limited offer on the two most test-driven models: Volt X and Pulse.
+    Convert customers who test-drove a Volt X or Pulse in the last 6 months but have not ordered or
+    contacted a dealer since, with a time-limited $2,500 bonus on the model they drove.
   brand:
     name: AURORA MOTORS
     primary_color: "#0B3D91"
@@ -30,8 +30,8 @@ audience:
       - {name: DealerName,    type: Text, length: 100}  # dealer where they test-drove
       - {name: LoyaltyTier,   type: Text, length: 20}
       - {name: Region,        type: Text, length: 20}
-  # Most recent completed test drive per customer; no purchase on/after it; no later lead that
-  # shows dealer contact or conversion.
+  # Most recent completed Volt X / Pulse test drive per customer in the last 6 months; no purchase
+  # on/after it; no later lead that shows dealer contact or conversion.
   sql: |
     SELECT x.SubscriberKey, x.EmailAddress, x.FirstName, x.Model, x.TestDriveDate, x.LeadID,
            x.DealerID, x.DealerName, x.LoyaltyTier, x.Region
@@ -45,6 +45,8 @@ audience:
       WHERE c.EmailOptIn = 1
         AND l.Status = 'TestDriven'
         AND l.TestDriveDate IS NOT NULL
+        AND l.TestDriveDate >= DATEADD(MONTH, -6, GETDATE())
+        AND l.Model IN ('Volt X', 'Pulse')
         AND NOT EXISTS (SELECT 1 FROM [CK_Master_Purchases] p
                         WHERE p.SubscriberKey = l.SubscriberKey AND p.PurchaseDate >= l.TestDriveDate)
         AND NOT EXISTS (SELECT 1 FROM [CK_Master_Leads_TestDrives] l2
@@ -58,15 +60,15 @@ emails:
   - ref: offer
     name: "TD Convert: Test-Drive Bonus"
     subject: "%%=v(@FirstName)=%%, your test drive unlocked a $2,500 bonus"
-    preheader: "Order a Volt X or Pulse this month and we'll take $2,500 off. Your dealer has the details."
+    preheader: "Order your %%=v(@Model)=%% in the next 30 days and we'll take $2,500 off."
     template: offer_card.html
     blocks:
       headline: "Liked the drive? Make it yours."
       body: >
-        Thanks for taking the %%=v(@Model)=%% for a spin. To help you decide, order a Volt X or Pulse
-        in the next 30 days and get a $2,500 test-drive bonus, on top of current finance rates.
+        Thanks for taking the %%=v(@Model)=%% for a spin. To help you decide, order yours in the next
+        30 days and get a $2,500 test-drive bonus, on top of current finance rates.
       offer_value: "$2,500 OFF"
-      offer_description: "Test-drive bonus on a new Volt X or Pulse"
+      offer_description: "Test-drive bonus on a new %%=v(@Model)=%%"
       offer_code: "DRIVE2500"
       offer_expiry: "in 30 days"
       cta_text: "Build my order"
@@ -75,7 +77,7 @@ emails:
       terms: "Sample offer for demonstration. Valid on new Volt X and Pulse orders only; one per customer."
   - ref: resend
     name: "TD Convert: Bonus Reminder"
-    subject: "Your $2,500 Volt X & Pulse bonus is waiting"
+    subject: "Your $2,500 %%=v(@Model)=%% bonus is waiting"
     preheader: "The test-drive bonus you earned is still available. It takes minutes to start an order."
     template: offer_card.html
     blocks:
@@ -93,7 +95,7 @@ emails:
       terms: "Sample offer for demonstration. Valid on new Volt X and Pulse orders only; one per customer."
   - ref: dealer_nudge
     name: "TD Convert: Talk to Your Dealer"
-    subject: "Questions about Volt X or Pulse? Your dealer can help"
+    subject: "Questions about the %%=v(@Model)=%%? Your dealer can help"
     preheader: "Get a personal quote with your $2,500 bonus applied. No obligation."
     template: offer_card.html
     blocks:
