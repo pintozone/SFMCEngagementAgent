@@ -435,3 +435,48 @@ def lint_ampscript(code: str, store: AuditStore | None = None, de_key: str | Non
                 if known and f.lower() not in known:
                     r.add("warn", "attribute not in DE", f"AttributeValue(\"{f}\") isn't a field of {de['name']}")
     return r
+
+
+def run_select_live(be: Any, sql: str, store: AuditStore | None = None, top: int = 50, timeout: int = 900,
+                    keep: bool = False, log: Any = print) -> list[dict]:
+    """Run a SELECT in the live tenant through a temporary DE + query + automation, then clean up.
+    The caller is responsible for asking the user first (this writes to the tenant temporarily)."""
+    from .client.rest import SFMCError
+    from .modules.automation import AutomationSpec, QuerySpec
+    from .modules.data_extensions import DESpec, FieldSpec
+    cols = output_columns(sql)
+    if any(re.fullmatch(r"(\w+\.)?\*", c["expr"].strip()) for c in cols):
+        raise SFMCError("list the columns explicitly (SELECT * can't be typed into a scratch DE)")
+    aliases = table_aliases(sql)
+    fields = []
+    for c in cols:
+        ftype = "Text"
+        if store and c["field"] and c["alias_src"]:
+            src = store.resolve(aliases.get(c["alias_src"].lower(), ""))
+            sf = next((f for f in store.fields(src["key"]) if f["name"].lower() == c["field"].lower()), None) if src else None
+            if sf and sf["type"] in ("Number", "Date", "Boolean", "Decimal"):
+                ftype = sf["type"]
+        fields.append(FieldSpec(c["name"], "Text", 4000) if ftype == "Text" else FieldSpec(c["name"], ftype))
+    name = scratch_name(sql)
+    collist = ", ".join(f"[{c['name']}]" for c in cols)
+    wrapped = sql if re.search(r"\bSELECT\s+(DISTINCT\s+)?TOP\b", sql, re.I) else \
+        f"SELECT TOP {top} {collist} FROM (\n{sql}\n) AS _q"   # SFMC rejects SELECT * when JOINs are present
+    spec = DESpec(name, name, fields, folder="CampaignKit/Scratch", description="sfmc_kit scratch query (temporary)")
+    created: list[tuple[str, str]] = []
+    try:
+        be.ensure_de(spec); created.append(("de", name))
+        q = be.upsert_query(QuerySpec(name, name, wrapped, name, name)); created.append(("query", q["id"]))
+        au = be.upsert_automation(AutomationSpec(name, name, [[name]]), {name: q["id"]}); created.append(("automation", au["id"]))
+        status = be.run_automation(au["id"], timeout=timeout)
+        log(f"  automation finished: {status}")
+        return be.read_rows(name, max_rows=top)
+    finally:
+        if keep:
+            log(f"  kept scratch objects {name} (--keep)")
+        else:
+            for kind, ident in reversed(created):
+                try:
+                    {"automation": be.delete_automation, "query": be.delete_query, "de": be.delete_de}[kind](ident)
+                except Exception as e:  # report but keep cleaning
+                    log(f"  ! could not delete {kind} {ident}: {e}")
+            log(f"  cleaned up scratch objects {name}")

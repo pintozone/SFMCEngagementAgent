@@ -377,8 +377,72 @@ class LiveBackend(Backend):
                 return str(last_status)
         raise SFMCError(f"Automation {automation_id} did not finish within {timeout}s")
 
+    def automation_runs(self, automation_key: str, limit: int = 20) -> list[dict]:
+        """Run history from SOAP AutomationInstance (REST history endpoints aren't available on all stacks)."""
+        res = self.soap.retrieve("AutomationInstance",
+                                 ["Name", "CustomerKey", "Status", "StatusMessage", "StartTime", "CompletedTime",
+                                  "StatusLastUpdate", "IsActive"],
+                                 simple_filter("CustomerKey", "equals", automation_key))
+        out = [{"status": r.get("StatusMessage") or r.get("Status"), "message": r.get("StatusMessage"),
+                "started": r.get("StartTime"), "completed": r.get("CompletedTime"),
+                "active": r.get("IsActive") == "true", "activity": None}
+               for r in res if r.get("StartTime") or r.get("StatusMessage")]   # skip "No rows were found" placeholders
+        out.sort(key=lambda x: str(x["started"] or ""), reverse=True)
+        return out[:limit]
+
+    # ------------------------------------------------------------------ automation schedules (SOAP Schedule)
+    def _schedule_call(self, automation_id: str, action: str, inner: str = "<Schedule/>") -> str:
+        from .soap import NS
+        body = (f'<ScheduleRequestMsg xmlns="{NS}"><Action>{action}</Action>{inner}<Interactions>'
+                f'<Interaction xsi:type="Automation"><ObjectID>{x(automation_id)}</ObjectID></Interaction>'
+                f'</Interactions></ScheduleRequestMsg>')
+        root = self.soap._call("Schedule", body)
+        codes = [e.text for e in root.iter() if e.tag.endswith("StatusCode")]
+        msgs = [e.text for e in root.iter() if e.tag.endswith("StatusMessage")]
+        if codes and codes[0] != "OK":
+            raise SFMCError(f"Schedule {action} failed: {msgs[0] if msgs else codes[0]}")
+        return msgs[0] if msgs else "OK"
+
+    def schedule_automation(self, automation_id: str, recurrence_xml: str) -> dict:
+        """Replace any existing schedule (SFMC keeps the old one otherwise), then wait for the new one to show."""
+        cur = self.automation_schedule(automation_id)
+        if cur.get("scheduleStatus") in ("active", "paused"):
+            self.unschedule(automation_id)
+        self._schedule_call(automation_id, "start", recurrence_xml)
+        return self._wait_schedule(automation_id, lambda s: s.get("scheduleStatus") == "active" and s.get("id") != cur.get("id"))
+
+    def pause_schedule(self, automation_id: str) -> dict:
+        self._schedule_call(automation_id, "pause")
+        return self._wait_schedule(automation_id, lambda s: s.get("scheduleStatus") == "paused")
+
+    def unschedule(self, automation_id: str) -> dict:
+        self.rest.patch(f"/automation/v1/automations/{automation_id}", {"startSource": {"typeId": 1}})
+        return self._wait_schedule(automation_id, lambda s: s.get("scheduleStatus") in ("none", None))
+
+    def _wait_schedule(self, automation_id: str, done: Any, tries: int = 10) -> dict:
+        s: dict = {}
+        for _ in range(tries):   # reads lag writes by a few seconds
+            s = self.automation_schedule(automation_id)
+            if done(s):
+                return s
+            time.sleep(2)
+        return s
+
+    def automation_schedule(self, automation_id: str) -> dict:
+        a = self.rest.get(f"/automation/v1/automations/{automation_id}")
+        return {"status": a.get("status"), **(a.get("schedule") or {})}
+
     def delete_automation(self, automation_id: str) -> None:
-        self.rest.delete(f"/automation/v1/automations/{automation_id}", allow_404=True)
+        """REST DELETE isn't available on every stack (404), so delete over SOAP and confirm it's gone."""
+        exists = lambda: self.rest.get(f"/automation/v1/automations/{automation_id}", allow_404=True) is not None  # noqa: E731
+        if not exists():
+            return
+        try:
+            self.soap.delete(f'<Objects xsi:type="Automation"><ObjectID>{x(automation_id)}</ObjectID></Objects>')
+        except SFMCError:
+            self.rest.delete(f"/automation/v1/automations/{automation_id}", allow_404=True)
+        if exists():
+            raise SFMCError(f"automation {automation_id} could not be deleted")
 
     # ------------------------------------------------------------------ journey builder
     def send_defaults(self, send_classification_key: str) -> dict[str, str]:

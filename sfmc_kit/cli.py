@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from datetime import datetime
 
 from .brief import BriefError, load_brief, load_yaml
 from .builder import BuildError, Builder, plan, run_analytics, teardown
@@ -381,47 +382,10 @@ def cmd_sql(a, be: Backend) -> None:
 
 
 def _sql_run_live(a, be, sql: str, dt) -> list[dict]:
-    from .modules.automation import AutomationSpec, QuerySpec
-    from .modules.data_extensions import FieldSpec
-    store = _store_if_synced(be)
-    cols = dt.output_columns(sql)
-    aliases = dt.table_aliases(sql)
-    fields = []
-    for c in cols:
-        ftype, length = "Text", 4000
-        if store and c["field"] and c["alias_src"]:
-            src = store.resolve(aliases.get(c["alias_src"].lower(), ""))
-            sf = next((f for f in store.fields(src["key"]) if f["name"].lower() == c["field"].lower()), None) if src else None
-            if sf and sf["type"] in ("Number", "Date", "Boolean", "Decimal"):
-                ftype, length = sf["type"], None
-        fields.append(FieldSpec(c["name"], ftype, length) if ftype == "Text" else FieldSpec(c["name"], ftype))
     name = dt.scratch_name(sql)
-    if any(re.fullmatch(r"(\w+\.)?\*", c["expr"].strip()) for c in cols):
-        raise SFMCError("list the columns explicitly for `sql run` (SELECT * can't be typed into a scratch DE)")
-    collist = ", ".join(f"[{c['name']}]" for c in cols)
-    wrapped = sql if re.search(r"\bSELECT\s+(DISTINCT\s+)?TOP\b", sql, re.I) else \
-        f"SELECT TOP {a.top} {collist} FROM (\n{sql}\n) AS _q"   # SFMC rejects SELECT * when JOINs are present
     confirm(f"Create scratch DE/query/automation {name} in the LIVE tenant, run it, read up to {a.top} rows, "
             f"then delete all three?", "RUN", a.yes)
-    spec = DESpec(name, name, fields, folder="CampaignKit/Scratch", description="sfmc_kit sql run (temporary)")
-    created = []
-    try:
-        be.ensure_de(spec); created.append(("de", name))
-        q = be.upsert_query(QuerySpec(name, name, wrapped, name, name)); created.append(("query", q["id"]))
-        au = be.upsert_automation(AutomationSpec(name, name, [[name]]), {name: q["id"]}); created.append(("automation", au["id"]))
-        status = be.run_automation(au["id"], timeout=a.timeout)
-        print(f"  automation finished: {status}")
-        return be.read_rows(name, max_rows=a.top)
-    finally:
-        if a.keep:
-            print(f"  kept scratch objects {name} (--keep)")
-        else:
-            for kind, ident in reversed(created):
-                try:
-                    {"automation": be.delete_automation, "query": be.delete_query, "de": be.delete_de}[kind](ident)
-                except Exception as e:  # report but keep cleaning
-                    print(f"  ! could not delete {kind} {ident}: {e}")
-            print(f"  cleaned up scratch objects {name}")
+    return dt.run_select_live(be, sql, _store_if_synced(be), top=a.top, timeout=a.timeout, keep=a.keep)
 
 
 def cmd_amp(a, be: Backend) -> None:
@@ -544,6 +508,101 @@ def cmd_proof(a, be: Backend) -> None:
             raise SystemExit(1)
 
 
+def cmd_auto(a, be: Backend) -> None:
+    from . import automation_ops as ao
+    from . import devtools as dt
+    if a.auto_cmd == "list":
+        items = ao.list_automations(be)
+        if a.status:
+            items = [x for x in items if str(x["status"]).lower() == a.status.lower()
+                     or str(x["schedule"]).lower() == a.status.lower()]
+        table(items, ["name", "status", "schedule", "last_run", "key"], limit=200, maxw=45)
+        return
+    info = ao.find(be, a.automation)
+    if a.auto_cmd == "show":
+        print(f"{info['name']}  [{info['key']}]  status {info['status']} · schedule {info['schedule']} · last run {info['last_run']}")
+        for s in info["steps"]:
+            print(f"  step {s['step']}")
+            for act in s["activities"]:
+                tg = ", ".join(f"{t['name']} ({t['rows']} rows)" for t in act["targets"])
+                print(f"    · {act['type']:<13} {act['name']}" + (f"  →  {tg}" if tg else "")
+                      + (f"  [{act.get('update_type')}]" if act.get("update_type") else ""))
+                if act.get("sql"):
+                    first = " ".join(act["sql"].split())[:150]
+                    print(f"        {first}{'…' if len(act['sql']) > 150 else ''}")
+        last = (ao.runs(be, info, 1) or [None])[0]
+        if last:
+            print(f"  latest run: {last['status']} · {last['started']} → {last['completed']}")
+    elif a.auto_cmd == "runs":
+        rs = ao.runs(be, info, a.limit)
+        for r in rs:
+            try:
+                st = datetime.fromisoformat(str(r["started"])[:19]); en = datetime.fromisoformat(str(r["completed"])[:19])
+                r["duration"] = str(en - st)
+            except (TypeError, ValueError):
+                r["duration"] = ""
+        print(f"{len(rs)} run(s) of {info['name']}")
+        table(rs, ["started", "completed", "duration", "status", "message", "activity"], maxw=60)
+    elif a.auto_cmd == "diagnose":
+        store = _store_if_synced(be)
+        deep_rows = None
+        if a.deep:
+            if be.mode != "live":
+                print("(--deep reads the _AutomationActivityInstance data view; live only)")
+            else:
+                sql = ao.deep_sql(info, a.days)
+                confirm(f"Deep diagnose reads _AutomationActivityInstance through a temporary scratch DE/query/automation "
+                        f"(created, run and deleted, about 2 minutes). Continue?", "RUN", a.yes)
+                deep_rows = dt.run_select_live(be, sql, None, top=200)
+        d = ao.diagnose(be, info, store, deep_rows)
+        print(f"{info['name']}: {d['summary']}")
+        table(d["findings"], ["severity", "where", "detail", "fix"], maxw=90, limit=100)
+        if deep_rows is not None:
+            print(f"\nActivity runs in the last {a.days} days:")
+            table(deep_rows, ["ActivityInstanceStartTime_UTC", "ActivityName", "ActivityInstanceStatus",
+                              "ActivityInstanceStatusDetails"], maxw=70, limit=50)
+    elif a.auto_cmd in ("schedule", "pause", "resume", "unschedule"):
+        if a.auto_cmd == "schedule":
+            hh, mm = (a.at or "06:00").split(":")
+            day = datetime.strptime(a.start, "%Y-%m-%d") if a.start else datetime.now()
+            local = day.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+            start = ao.to_sfmc_time(local, a.tz)
+            now = ao.sfmc_now()
+            from datetime import timedelta
+            while start <= now:
+                start += timedelta(hours=a.interval) if a.every == "hourly" else timedelta(days=1)
+            until = ao.to_sfmc_time(datetime.strptime(a.until, "%Y-%m-%d").replace(hour=start.hour, minute=start.minute), a.tz) \
+                if a.until else None
+            xml = ao.recurrence_xml(a.every, a.interval, start, until, a.count, a.days.split(",") if a.days else None)
+            unit = {"hourly": "hour", "daily": "day", "weekly": "week"}[a.every]
+            what = ((f"every {a.interval} {unit}s" if a.interval > 1 else f"every {unit}") + (f" on {a.days}" if a.days else "")
+                    + f", first run {start:%Y-%m-%d %H:%M} SFMC time (US Central, UTC-6)"
+                    + (f" = {a.at} {a.tz}" if a.tz else "") + (f", until {a.until}" if a.until else "")
+                    + (f", {a.count} runs" if a.count else ""))
+            if be.mode == "live":
+                confirm(f"Schedule {info['name']} {what}?", "SCHEDULE", a.yes)
+            r = ao.set_schedule(be, info, xml)
+            print(f"{info['name']}: scheduled {what}")
+        else:
+            if be.mode == "live":
+                confirm(f"{a.auto_cmd.title()} the schedule of {info['name']} in the LIVE tenant?", a.auto_cmd.upper(), a.yes)
+            r = {"pause": ao.pause, "resume": ao.resume, "unschedule": ao.unschedule}[a.auto_cmd](be, info)
+        print(f"  status {r.get('status')} · schedule {r.get('scheduleStatus')}"
+              + (f" · next run {r.get('scheduledTime')}" if r.get("scheduledTime") and not str(r.get("scheduledTime")).startswith("0001") else "")
+              + (f" · {r.get('icalRecur')}" if r.get("icalRecur") else ""))
+    elif a.auto_cmd == "run":
+        if be.mode == "live":
+            confirm(f"Run {info['name']} once now in the LIVE tenant?", "RUN", a.yes)
+        try:
+            status = be.run_automation(info["id"], timeout=a.timeout)
+            print(f"{info['name']}: finished ({status})")
+        finally:
+            last = (ao.runs(be, info, 1) or [None])[0]
+            if last:
+                print(f"  latest run: {last['status']} · {last['started']} → {last['completed']}"
+                      + (f" · {last['message']}" if last.get("message") and last["message"] != last["status"] else ""))
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--mode", choices=["mock", "live"], default=argparse.SUPPRESS)
@@ -646,6 +705,29 @@ def main(argv: list[str] | None = None) -> int:
         if name == "generate":
             y.add_argument("--force", action="store_true"); y.add_argument("--limit", type=int, default=60)
 
+    x = sub.add_parser("auto", help="Automation Studio: list, show, runs, diagnose, run, schedule, create")
+    at = x.add_subparsers(dest="auto_cmd", required=True)
+    y = at.add_parser("list", help="automations with status, schedule and last run"); y.add_argument("--status")
+    for name, hlp in (("show", "steps, activities, targets, SQL"), ("runs", "run history"),
+                      ("diagnose", "why it fails and how to fix it"), ("run", "run once now (confirmation)")):
+        y = at.add_parser(name, help=hlp); y.add_argument("automation", help="name, key or id")
+        if name == "runs":
+            y.add_argument("--limit", type=int, default=20)
+        if name == "diagnose":
+            y.add_argument("--deep", action="store_true", help="read _AutomationActivityInstance (live, scratch query)")
+            y.add_argument("--days", type=int, default=7)
+        if name == "run":
+            y.add_argument("--timeout", type=int, default=900)
+
+    y = at.add_parser("schedule", help="schedule (SFMC runs schedules in US Central time; --tz converts)")
+    y.add_argument("automation"); y.add_argument("--every", choices=["hourly", "daily", "weekly"], required=True)
+    y.add_argument("--interval", type=int, default=1); y.add_argument("--at", help="HH:MM (default 06:00)")
+    y.add_argument("--days", help="weekly: MO,TU,WE,TH,FR,SA,SU"); y.add_argument("--tz", help="IANA zone of --at, e.g. Europe/Copenhagen")
+    y.add_argument("--start", help="YYYY-MM-DD (default today)"); y.add_argument("--until", help="YYYY-MM-DD")
+    y.add_argument("--count", type=int, help="number of runs instead of --until")
+    for name in ("pause", "resume", "unschedule"):
+        y = at.add_parser(name, help=f"{name} the schedule"); y.add_argument("automation")
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -656,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
          "brief": cmd_brief, "cloudpage": cmd_cloudpage, "audit": cmd_audit, "sql": cmd_sql,
-         "amp": cmd_amp, "proof": cmd_proof}[a.cmd](a, be)
+         "amp": cmd_amp, "proof": cmd_proof, "auto": cmd_auto}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

@@ -63,6 +63,8 @@ class MockBackend(Backend):
         self.seed = seed
         self.db.execute("CREATE TABLE IF NOT EXISTS mock_objects (type TEXT, key TEXT, id TEXT, name TEXT, "
                         "payload TEXT, created_at TEXT, PRIMARY KEY(type, key))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS mock_auto_runs (automation_id TEXT, started TEXT, completed TEXT, "
+                        "status TEXT, message TEXT, activity TEXT)")
         for name, cols in DATA_VIEWS.items():
             self.db.execute(f'CREATE TABLE IF NOT EXISTS "{name}" ({cols})')
         self.db.commit()
@@ -225,13 +227,31 @@ class MockBackend(Backend):
         a = self._get_by_id("automation", automation_id)
         if not a:
             raise SFMCError(f"Automation {automation_id} not found")
-        for step in a["steps"]:
-            for qid in step:
-                q = self._get_by_id("query", qid)
-                if not q:
-                    raise SFMCError(f"Query {qid} not found")
-                self._run_query(q)
+        started = _ts(datetime.now())
+        current = None
+        try:
+            for step in a["steps"]:
+                for qid in step:
+                    q = self._get_by_id("query", qid)
+                    if not q:
+                        raise SFMCError(f"Query {qid} not found")
+                    current = q["key"]
+                    self._run_query(q)
+        except SFMCError as e:
+            self.db.execute("INSERT INTO mock_auto_runs VALUES (?,?,?,?,?,?)",
+                            (automation_id, started, _ts(datetime.now()), "Error", str(e)[:1000], current))
+            self.db.commit()
+            raise
+        self.db.execute("INSERT INTO mock_auto_runs VALUES (?,?,?,?,?,?)",
+                        (automation_id, started, _ts(datetime.now()), "Complete", "Complete", None))
+        self.db.commit()
         return "Complete"
+
+    def automation_runs(self, automation_id: str, limit: int = 20) -> list[dict]:
+        rows = self.db.execute("SELECT * FROM mock_auto_runs WHERE automation_id=? ORDER BY rowid DESC LIMIT ?",
+                               (automation_id, limit)).fetchall()
+        return [{"status": r["status"], "message": r["message"], "started": r["started"], "completed": r["completed"],
+                 "activity": r["activity"]} for r in rows]
 
     def _run_query(self, q: dict) -> int:
         name, fields = self._fields(q["target_key"])

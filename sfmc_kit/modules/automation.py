@@ -36,7 +36,8 @@ def automation_payload(spec: AutomationSpec, query_ids: dict[str, str]) -> dict:
         acts = []
         for j, qkey in enumerate(step, start=1):
             acts.append({"name": qkey, "objectTypeId": 300, "activityObjectId": query_ids[qkey], "displayOrder": j})
-        steps.append({"name": f"Step {i}", "step": i, "activities": acts})
+        # REST accepts multi-step automations only with a zero-based `stepNumber` (`step` is rejected for >1 step).
+        steps.append({"name": f"Step {i}", "stepNumber": i - 1, "activities": acts})
     # startSource typeId 1 = "Schedule" (left unscheduled). Without it SFMC creates an automation of
     # type "unspecified", which the runallonce endpoint rejects.
     return {"name": spec.name, "key": spec.key, "description": spec.description, "steps": steps,
