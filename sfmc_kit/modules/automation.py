@@ -37,4 +37,7 @@ def automation_payload(spec: AutomationSpec, query_ids: dict[str, str]) -> dict:
         for j, qkey in enumerate(step, start=1):
             acts.append({"name": qkey, "objectTypeId": 300, "activityObjectId": query_ids[qkey], "displayOrder": j})
         steps.append({"name": f"Step {i}", "step": i, "activities": acts})
-    return {"name": spec.name, "key": spec.key, "description": spec.description, "steps": steps}
+    # startSource typeId 1 = "Schedule" (left unscheduled). Without it SFMC creates an automation of
+    # type "unspecified", which the runallonce endpoint rejects.
+    return {"name": spec.name, "key": spec.key, "description": spec.description, "steps": steps,
+            "startSource": {"typeId": 1}}

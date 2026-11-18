@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from .brief import BriefError, load_brief
+from .brief import BriefError, load_brief, load_yaml
 from .builder import BuildError, Builder, plan, run_analytics, teardown
 from .client.base import Backend
 from .client.rest import SFMCError
@@ -63,7 +63,7 @@ def cmd_de(a, be: Backend) -> None:
     elif a.de_cmd == "rows":
         table(be.read_rows(a.key, max_rows=a.limit), limit=a.limit)
     elif a.de_cmd == "create":
-        spec = DESpec.from_dict(yaml.safe_load(Path(a.spec).read_text()))
+        spec = DESpec.from_dict(load_yaml(Path(a.spec).read_text()))
         de, created = be.ensure_de(spec)
         print(f"{'Created' if created else 'Exists'}: {de}")
     elif a.de_cmd == "load":

@@ -39,6 +39,9 @@ def test_briefs_parse_and_yes_no_keys():
     b = load_brief(ROOT / "briefs/ev_launch.yaml")
     d = b.steps[2]["decision"]
     assert d["yes"] and d["no"], "YAML yes/no keys must survive parsing"
+    nested = d["yes"][2]["decision"]
+    assert nested["on"] == "clicked", "YAML `on:` key must not become a boolean"
+    assert b.audience_de.fields[0].pk is True
     assert b.prefix == "CK_EVLAUNCH_" and b.audience_de.key == "CK_EVLAUNCH_Audience"
     load_brief(ROOT / "briefs/service_reminder.yaml")
 

@@ -15,6 +15,24 @@ class BriefError(ValueError):
     pass
 
 
+class _BriefLoader(yaml.SafeLoader):
+    """SafeLoader where only true/false are booleans. YAML 1.1 also treats yes/no/on/off as booleans,
+    which silently breaks journey keys like `on: clicked`, `yes:` and `no:`."""
+
+
+_BriefLoader.yaml_implicit_resolvers = {
+    k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:bool"]
+    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_BriefLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool", __import__("re").compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"))
+
+
+def load_yaml(text: str):
+    return yaml.load(text, Loader=_BriefLoader)
+
+
 @dataclass
 class EmailBrief:
     ref: str
@@ -58,7 +76,7 @@ def _req(d: dict, key: str, ctx: str) -> Any:
 
 def load_brief(path: str | Path) -> Brief:
     path = Path(path)
-    raw = yaml.safe_load(path.read_text())
+    raw = load_yaml(path.read_text())
     return parse_brief(raw, path)
 
 

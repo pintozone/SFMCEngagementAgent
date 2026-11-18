@@ -276,9 +276,18 @@ class LiveBackend(Backend):
                 "senderProfileId": (r.get("SenderProfile") or {}).get("ObjectID"),
                 "deliveryProfileId": (r.get("DeliveryProfile") or {}).get("ObjectID")}
 
+    def _get_or_none(self, path: str) -> dict | None:
+        """Journey Builder answers a lookup by unknown key with 400 (not 404)."""
+        try:
+            return self.rest.get(path, allow_404=True)
+        except SFMCError as e:
+            if e.status == 400:
+                return None
+            raise
+
     def upsert_event_definition(self, payload: dict) -> dict:
         key = payload["eventDefinitionKey"]
-        existing = self.rest.get(f"/interaction/v1/eventDefinitions/key:{key}", allow_404=True)
+        existing = self._get_or_none(f"/interaction/v1/eventDefinitions/key:{key}")
         if existing and existing.get("id"):
             res = self.rest.put(f"/interaction/v1/eventDefinitions/{existing['id']}", {**payload, "id": existing["id"]})
             return {"id": existing["id"], "key": key, "created": False}
@@ -290,12 +299,14 @@ class LiveBackend(Backend):
 
     def upsert_journey(self, payload: dict) -> dict:
         body = {k: v for k, v in payload.items() if not k.startswith("_")}
-        existing = self.rest.get(f"/interaction/v1/interactions/key:{payload['key']}", allow_404=True)
+        existing = self._get_or_none(f"/interaction/v1/interactions/key:{payload['key']}")
         if existing and existing.get("id"):
             if existing.get("status") != "Draft":
                 raise SFMCError(f"Journey {payload['key']} v{existing.get('version')} is {existing.get('status')}; "
                                 "create a new version in the UI or tear down before rebuilding")
             body.update({"id": existing["id"], "version": existing["version"]})
+            if existing.get("modifiedDate"):  # optimistic-concurrency token required by Journey Builder
+                body["modifiedDate"] = existing["modifiedDate"]
             res = self.rest.put("/interaction/v1/interactions", body)
             created = False
         else:

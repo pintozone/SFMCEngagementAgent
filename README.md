@@ -61,10 +61,16 @@ Live-mode safety: every live write asks you to type a confirmation (`BUILD`, `PU
 Journeys are created as **drafts**. `--publish` activates a journey and asks for a separate confirmation.
 `teardown` deletes only the objects recorded for that campaign.
 
-### Things to verify on the first live build
+### Verified against a live tenant (stack S7, 2026-11-18)
+DE create/describe/delete (SOAP) · rowset upsert/read (REST) · DE, query and asset folders · audience Query Activity
+and Automation run · 5 Content Builder HTML emails · DE entry Event Definition · 12-activity draft journey with
+emails attached to its EMAILV2 steps and open/click splits (`statsTypeId` 2/3 accepted) · analytics automation over
+Data Views. API quirks the kit already handles: automations need `startSource: {typeId: 1}` for *run once*;
+Journey Builder returns **400** (not 404) for an unknown key; journey updates must send back `modifiedDate`;
+YAML `on:`/`yes:`/`no:` keys are read as strings (not YAML 1.1 booleans).
+
+### Still to do by hand before publishing
 These are the parts of the SFMC API that are least documented, or that differ between tenants. The kit sets them in one place each:
-* **Engagement split `statsTypeId`** (`sfmc_kit/modules/journey.py`, `STATS_TYPE`): opened = 2, clicked = 3.
-  If Journey Builder rejects the split, export a split from a journey you built in the UI and copy its values.
 * **Data Extension entry schedule.** The journey is created with a DE entry source. Set the entry schedule
   (or a "Journey Audience" automation step) in Journey Builder before publishing, or use `entry.type: api_event`.
 * **Send classification.** `send.send_classification` is the *external key* (default `Default Commercial`).

@@ -8,7 +8,7 @@ from typing import Any
 DE_ENTRY_SAE_ID = "97e942ee-6914-4d3d-9e52-37ecb71f79ed"
 API_ENTRY_SAE_ID = "7db1f972-f8b7-49b6-91b5-fa218e13953d"
 
-# Engagement split statistic types. Verify on first live build; adjust here if SFMC rejects.
+# Engagement split statistic types (accepted by a live tenant: opened=2, clicked=3).
 STATS_TYPE = {"opened": 2, "clicked": 3}
 
 WAIT_UNITS = {"minutes": "MINUTES", "hours": "HOURS", "days": "DAYS", "weeks": "WEEKS"}
