@@ -14,6 +14,7 @@ from .brief import BriefError, load_brief
 from .builder import BuildError, Builder, plan, run_analytics, teardown
 from .client.base import Backend
 from .client.rest import SFMCError
+from .auth import AuthError
 from .config import DATA_DIR, ConfigError, load_live_config
 from .db import Sandbox, mock_db_path
 from .modules.assets import preview, render_template
@@ -221,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         {"auth-test": cmd_auth_test, "de": cmd_de, "seed": cmd_seed, "build": cmd_build,
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
          "teardown": cmd_teardown}[a.cmd](a, be)
-    except (ConfigError, BriefError, BuildError, SFMCError) as e:
+    except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     return 0
