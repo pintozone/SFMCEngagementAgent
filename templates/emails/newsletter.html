@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!-- template: Newsletter with an intro and three content cards (title, text, link each). Owner updates, monthly roundups, nurture. Personalizes FirstName. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ brand_name }} News</title>
+<style>
+  @media only screen and (max-width:620px){ .container{width:100%!important} .px{padding-left:20px!important;padding-right:20px!important} }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#f2f4f7;">
+%%[
+SET @FirstName = AttributeValue("FirstName")
+IF Empty(@FirstName) THEN SET @FirstName = "there" ENDIF
+]%%
+<div style="display:none;max-height:0;overflow:hidden;">{{ preheader_hidden }}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f2f4f7;">
+  <tr><td align="center" style="padding:24px 0;">
+    <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;font-family:Arial,Helvetica,sans-serif;">
+      <tr><td style="background:{{ brand_primary_color }};padding:18px 32px;" class="px">
+        <a href="{{ brand_website }}" alias="Logo" style="color:#ffffff;text-decoration:none;font-size:20px;font-weight:bold;letter-spacing:2px;">{{ brand_name }}</a>
+      </td></tr>
+      <tr><td class="px" style="padding:32px 32px 8px;">
+        <h1 style="margin:0 0 12px;color:#111827;font-size:24px;line-height:1.25;">{{ headline }}</h1>
+        <p style="margin:0;color:#374151;font-size:16px;line-height:1.6;">Hi %%=v(@FirstName)=%%, {{ intro }}</p>
+      </td></tr>
+      <tr><td class="px" style="padding:16px 32px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e5e7eb;">
+          <tr><td style="padding:20px 0;">
+            <h2 style="margin:0 0 6px;color:#111827;font-size:18px;">{{ card1_title }}</h2>
+            <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.5;">{{ card1_text }}</p>
+            <a href="{{ card1_url }}" alias="{{ card1_title }}" style="color:{{ brand_primary_color }};font-weight:bold;font-size:14px;">Read more →</a>
+          </td></tr>
+          <tr><td style="padding:20px 0;border-top:1px solid #e5e7eb;">
+            <h2 style="margin:0 0 6px;color:#111827;font-size:18px;">{{ card2_title }}</h2>
+            <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.5;">{{ card2_text }}</p>
+            <a href="{{ card2_url }}" alias="{{ card2_title }}" style="color:{{ brand_primary_color }};font-weight:bold;font-size:14px;">Read more →</a>
+          </td></tr>
+          <tr><td style="padding:20px 0;border-top:1px solid #e5e7eb;">
+            <h2 style="margin:0 0 6px;color:#111827;font-size:18px;">{{ card3_title }}</h2>
+            <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.5;">{{ card3_text }}</p>
+            <a href="{{ card3_url }}" alias="{{ card3_title }}" style="color:{{ brand_primary_color }};font-weight:bold;font-size:14px;">Read more →</a>
+          </td></tr>
+        </table>
+      </td></tr>
+      <tr><td class="px" align="center" style="padding:8px 32px 32px;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td style="background:{{ brand_accent_color }};border-radius:6px;">
+            <a href="{{ cta_url }}" alias="{{ cta_alias }}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-weight:bold;text-decoration:none;font-size:16px;">{{ cta_text }}</a>
+          </td></tr></table>
+      </td></tr>
+      <tr><td class="px" style="background:#f9fafb;padding:20px 32px;color:#9ca3af;font-size:11px;line-height:1.6;">
+        This email was sent to %%emailaddr%% by %%Member_Busname%%, %%Member_Addr%%, %%Member_City%%, %%Member_State%% %%Member_PostalCode%%.<br>
+        <a href="%%profile_center_url%%" alias="Profile center" style="color:#9ca3af;">Update preferences</a> ·
+        <a href="%%unsub_center_url%%" alias="Unsubscribe" style="color:#9ca3af;">Unsubscribe</a> ·
+        <a href="%%view_email_url%%" alias="View online" style="color:#9ca3af;">View online</a>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>

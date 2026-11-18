@@ -1,0 +1,101 @@
+# Generated from: "Win back South-region Ridge pickup owners whose last service was over 9 months ago:
+# 2 emails 5 days apart, 20% off service, resend to non-openers."
+campaign:
+  name: "Ridge Service Win-Back (South)"
+  code: RIDGEWINBACK
+  objective: >
+    Bring lapsed Ridge pickup owners in the South region back for service with a 20% offer;
+    resend to anyone who doesn't open the first email.
+  brand:
+    name: AURORA MOTORS
+    primary_color: "#0B3D91"
+    accent_color: "#E85D04"
+    website: https://www.example.com/aurora
+  kpis: {open_rate: 0.30, click_rate: 0.06, service_bookings: 40}
+
+send:
+  send_classification: Default Commercial
+
+audience:
+  update_type: Overwrite
+  de:
+    fields:
+      - {name: SubscriberKey,   type: Text, length: 50, pk: true}
+      - {name: EmailAddress,    type: EmailAddress, required: true}
+      - {name: FirstName,       type: Text, length: 50}
+      - {name: Model,           type: Text, length: 50}
+      - {name: ModelYear,       type: Number}
+      - {name: VIN,             type: Text, length: 17}
+      - {name: LastServiceDate, type: Date}
+      - {name: DealerID,        type: Text, length: 10}
+      - {name: DealerName,      type: Text, length: 100}
+      - {name: LoyaltyTier,     type: Text, length: 20}
+  sql: |
+    SELECT x.SubscriberKey, x.EmailAddress, x.FirstName, x.Model, x.ModelYear, x.VIN,
+           x.LastServiceDate, x.DealerID, x.DealerName, x.LoyaltyTier
+    FROM (
+      SELECT c.SubscriberKey, c.EmailAddress, c.FirstName, v.Model, v.ModelYear, v.VIN,
+             c.LastServiceDate, d.DealerID, d.DealerName, c.LoyaltyTier,
+             ROW_NUMBER() OVER (PARTITION BY c.SubscriberKey ORDER BY v.ModelYear DESC) AS rn
+      FROM [CK_Master_Customers] c
+      INNER JOIN [CK_Master_Vehicles] v ON v.SubscriberKey = c.SubscriberKey
+      LEFT JOIN [CK_Master_Dealers] d ON d.DealerID = c.PreferredDealerID
+      WHERE c.EmailOptIn = 1
+        AND c.Region = 'South'
+        AND v.Model = 'Ridge'
+        AND v.IsCurrent = 1
+        AND c.LastServiceDate IS NOT NULL
+        AND c.LastServiceDate < DATEADD(MONTH, -9, GETDATE())
+    ) x
+    WHERE x.rn = 1
+
+emails:
+  - ref: offer
+    name: "Ridge Win-Back: 20% Off Service"
+    subject: "%%=v(@FirstName)=%%, 20% off your next Ridge service"
+    preheader: "It's been a while. Book any service at %%=v(@DealerName)=%% and save 20%."
+    template: offer_card.html
+    blocks:
+      headline: "Your Ridge has earned a check-up."
+      body: >
+        It's been more than nine months since your %%=v(@Model)=%% was last in for service. Book an
+        appointment and we'll take 20% off parts and labor, plus a complimentary multi-point inspection.
+      offer_value: "20% OFF"
+      offer_description: "Parts and labor on any scheduled service"
+      offer_code: "RIDGE20"
+      offer_expiry: "in 30 days"
+      cta_text: "Book my service"
+      cta_url: https://www.example.com/aurora/service/book?offer=RIDGE20
+      cta_alias: "Book service"
+      terms: "Sample offer for demonstration. One use per vehicle; cannot be combined with other offers."
+  - ref: resend
+    name: "Ridge Win-Back: Resend"
+    subject: "Still time: 20% off service for your Ridge"
+    preheader: "Your RIDGE20 offer is waiting. Book in under a minute."
+    template: offer_card.html
+    blocks:
+      headline: "Your 20% service offer is still here."
+      body: >
+        Keep your %%=v(@Model)=%% ready for whatever the road brings. Your offer covers parts and labor at
+        %%=v(@DealerName)=%%.
+      offer_value: "20% OFF"
+      offer_description: "Parts and labor on any scheduled service"
+      offer_code: "RIDGE20"
+      offer_expiry: "soon"
+      cta_text: "Claim 20% off"
+      cta_url: https://www.example.com/aurora/service/book?offer=RIDGE20&src=resend
+      cta_alias: "Claim offer resend"
+      terms: "Sample offer for demonstration. One use per vehicle; cannot be combined with other offers."
+
+journey:
+  name: "CK_RIDGEWINBACK Ridge Service Win-Back"
+  entry: {type: data_extension, entry_mode: SingleEntryAcrossAllVersions}
+  steps:
+    - email: offer
+    - wait: {days: 5}
+    - decision:
+        on: opened
+        email: offer
+        yes: []
+        no:
+          - email: resend

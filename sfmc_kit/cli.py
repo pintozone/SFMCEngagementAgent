@@ -146,10 +146,13 @@ def cmd_preview(a, be: Backend) -> None:
     out = DATA_DIR / "previews"
     out.mkdir(parents=True, exist_ok=True)
     for e in brief.emails:
-        html = preview(render_template(e.template, e.blocks, brief.brand), row)
+        rendered = render_template(e.template, e.blocks, brief.brand)
+        html = preview(rendered, row)
+        # Subjects are evaluated after the body in SFMC, so body variables are available to them.
+        subject = preview(rendered + "<!--SUBJ-->" + e.subject, row).split("<!--SUBJ-->")[-1]
         p = out / f"{brief.code}_{e.ref}.html"
         p.write_text(html)
-        print(f"  {p}  ({e.subject})")
+        print(f"  {p}\n    subject: {subject}")
 
 
 def cmd_status(a, be: Backend) -> None:
@@ -166,6 +169,56 @@ def cmd_teardown(a, be: Backend) -> None:
     confirm(f"Delete every object recorded for {code} in {be.mode} mode?", code, a.yes)
     n = teardown(be, Sandbox(), code)
     print(f"Deleted {n} objects.")
+
+
+def cmd_schema(a, be: Backend) -> None:
+    """Fields of the master DEs (what audience SQL may use), with example values."""
+    import sqlite3
+    specs = master_de_specs()
+    samples: dict[str, dict[str, list]] = {}
+    sb_path = Sandbox().path
+    db = sqlite3.connect(str(sb_path))
+    for key, spec in specs.items():
+        try:
+            rows = db.execute(f'SELECT * FROM "sample_{spec.name}" LIMIT 400').fetchall()
+            cols = [d[0] for d in db.execute(f'SELECT * FROM "sample_{spec.name}" LIMIT 1').description]
+        except sqlite3.Error:
+            continue
+        samples[key] = {c: list(dict.fromkeys(str(r[i]) for r in rows if r[i] is not None))[:4]
+                        for i, c in enumerate(cols)}
+    db.close()
+    keys = list(specs)
+    if be.mode == "live":
+        keys = [d["key"] for d in be.list_des("CK_Master_")]
+    for key in keys:
+        print(f"\n[{key}]" + ("  (sendable on SubscriberKey)" if key in specs and specs[key].sendable else ""))
+        if be.mode == "live" or key not in specs:
+            fields = [{"name": f["name"], "type": f["type"], "pk": f["pk"]} for f in be.describe_de(key)]
+        else:
+            fields = [{"name": f.name, "type": f.type, "pk": f.pk} for f in specs[key].fields]
+        for f in fields:
+            ex = ", ".join(samples.get(key, {}).get(f["name"], []))
+            print(f"  {f['name']:<22} {f['type']:<12} {'PK' if f['pk'] else '  '}  {ex[:70]}")
+    if not samples:
+        print("\n(no example values yet: run `python -m sfmc_kit seed`)")
+
+
+def cmd_templates(a, be: Backend) -> None:
+    from .briefcheck import list_templates
+    for t in list_templates():
+        print(f"\n{t.name}\n  {t.description}")
+        print(f"  blocks:     {', '.join(t.blocks)}")
+        print(f"  optional:   footnote, cta_alias, hero_alt (defaults applied)")
+        print(f"  variables:  {', '.join('@' + v for v in t.variables)}  (use as %%=v(@Var)=%% in subject/blocks)")
+        print(f"  reads DE fields: {', '.join(t.attributes)}")
+
+
+def cmd_brief(a, be: Backend) -> None:
+    from .briefcheck import check_brief, format_result
+    res = check_brief(a.brief)
+    print(format_result(res))
+    if not res.ok:
+        raise SystemExit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -213,6 +266,13 @@ def main(argv: list[str] | None = None) -> int:
     x = sub.add_parser("teardown", help="delete every object recorded for a campaign")
     x.add_argument("code")
 
+    sub.add_parser("schema", help="master DE fields + example values (for writing audience SQL)")
+    sub.add_parser("templates", help="email templates and the blocks each one needs")
+    x = sub.add_parser("brief", help="brief tools")
+    bs = x.add_subparsers(dest="brief_cmd", required=True)
+    y = bs.add_parser("check", help="validate a brief and dry-run its audience SQL in the mock tenant")
+    y.add_argument("brief")
+
     a = ap.parse_args(argv)
     a.mode = getattr(a, "mode", os.environ.get("SFMC_KIT_MODE", "mock"))
     a.verbose = getattr(a, "verbose", False)
@@ -221,7 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         be = get_backend(a.mode, a.verbose)
         {"auth-test": cmd_auth_test, "de": cmd_de, "seed": cmd_seed, "build": cmd_build,
          "analytics": cmd_analytics, "preview": cmd_preview, "status": cmd_status,
-         "teardown": cmd_teardown}[a.cmd](a, be)
+         "teardown": cmd_teardown, "schema": cmd_schema, "templates": cmd_templates,
+         "brief": cmd_brief}[a.cmd](a, be)
     except (ConfigError, AuthError, BriefError, BuildError, SFMCError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

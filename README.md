@@ -77,6 +77,25 @@ These are the parts of the SFMC API that are least documented, or that differ be
   The kit looks up its sender and delivery profiles over SOAP.
 * **Data Views** keep about 6 months of history, and engagement only shows up after real sends.
 
+## Describe a campaign in plain English
+In a Claude Code session on this repo, just describe the campaign. For example:
+
+> Win back South-region Ridge pickup owners whose last service was over 9 months ago: 2 emails 5 days apart,
+> 20% off service, resend to non-openers.
+
+The repo skill `.claude/skills/campaign-brief` drives the workflow:
+1. **Look up**: `schema` (master DE fields with example values) and `templates` (layouts, required blocks, `@variables`).
+2. **Write** `briefs/<code>.yaml`.
+3. **Check**: `brief check` validates the schema, template blocks, subject/preheader length, personalization fields and link aliases, then runs the audience SQL read-only in the mock tenant (count, duplicate keys, missing emails, unknown columns). Claude loops until it prints `OK`.
+4. **Rehearse** in the mock tenant (`build --publish`, `analytics`, `preview`) and show you the audience, journey outline, subjects, simulated KPIs and previews.
+5. **Build live as a draft** only after you say so, then read the journey back to verify it. Publishing, live teardown and master-data changes always need your explicit request.
+
+`briefs/ridgewinback.yaml` is the brief generated from the example above.
+
+Templates: `hero_cta.html` (launch/invite), `offer_card.html` (offer value, code, expiry, terms),
+`newsletter.html` (intro + 3 cards), `service_reminder.html` (vehicle/last-service box).
+Run `python -m sfmc_kit templates` for the blocks each one needs.
+
 ## Writing a brief
 See `briefs/ev_launch.yaml` (a 12-activity journey with nested open and click splits) and `briefs/service_reminder.yaml`.
 Journey steps:

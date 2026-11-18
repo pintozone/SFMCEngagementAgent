@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!-- template: Offer card with a big offer value, promo code and expiry, then a CTA and terms. Win-back, service and sales offers. Personalizes FirstName, Model, DealerName. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ brand_name }} Offer</title>
+<style>
+  @media only screen and (max-width:620px){ .container{width:100%!important} .px{padding-left:20px!important;padding-right:20px!important} }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#f2f4f7;">
+%%[
+SET @FirstName = AttributeValue("FirstName")
+IF Empty(@FirstName) THEN SET @FirstName = "there" ENDIF
+SET @Model = AttributeValue("Model")
+IF Empty(@Model) THEN SET @Model = "Aurora" ENDIF
+SET @DealerName = AttributeValue("DealerName")
+IF Empty(@DealerName) THEN SET @DealerName = "your Aurora dealer" ENDIF
+]%%
+<div style="display:none;max-height:0;overflow:hidden;">{{ preheader_hidden }}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f2f4f7;">
+  <tr><td align="center" style="padding:24px 0;">
+    <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;font-family:Arial,Helvetica,sans-serif;">
+      <tr><td style="background:{{ brand_primary_color }};padding:18px 32px;" class="px">
+        <a href="{{ brand_website }}" alias="Logo" style="color:#ffffff;text-decoration:none;font-size:20px;font-weight:bold;letter-spacing:2px;">{{ brand_name }}</a>
+      </td></tr>
+      <tr><td class="px" style="padding:32px 32px 8px;">
+        <p style="margin:0 0 8px;color:#6b7280;font-size:14px;">Hi %%=v(@FirstName)=%%,</p>
+        <h1 style="margin:0 0 12px;color:#111827;font-size:26px;line-height:1.25;">{{ headline }}</h1>
+        <p style="margin:0;color:#374151;font-size:16px;line-height:1.6;">{{ body }}</p>
+      </td></tr>
+      <tr><td class="px" style="padding:24px 32px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:2px dashed {{ brand_accent_color }};border-radius:8px;">
+          <tr><td align="center" style="padding:24px;">
+            <div style="color:{{ brand_accent_color }};font-size:40px;font-weight:bold;line-height:1.1;">{{ offer_value }}</div>
+            <div style="color:#374151;font-size:15px;margin:8px 0 16px;">{{ offer_description }}</div>
+            <div style="display:inline-block;background:#f3f4f6;border-radius:4px;padding:8px 16px;font-family:'Courier New',monospace;font-size:18px;letter-spacing:2px;color:#111827;">{{ offer_code }}</div>
+            <div style="color:#6b7280;font-size:13px;margin-top:12px;">Expires {{ offer_expiry }} · Redeem at %%=v(@DealerName)=%%</div>
+          </td></tr>
+        </table>
+      </td></tr>
+      <tr><td class="px" align="center" style="padding:0 32px 32px;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td style="background:{{ brand_accent_color }};border-radius:6px;">
+            <a href="{{ cta_url }}" alias="{{ cta_alias }}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-weight:bold;text-decoration:none;font-size:16px;">{{ cta_text }}</a>
+          </td></tr></table>
+        <p style="margin:20px 0 0;color:#9ca3af;font-size:12px;line-height:1.5;">{{ terms }}</p>
+      </td></tr>
+      <tr><td class="px" style="background:#f9fafb;padding:20px 32px;color:#9ca3af;font-size:11px;line-height:1.6;">
+        This email was sent to %%emailaddr%% by %%Member_Busname%%, %%Member_Addr%%, %%Member_City%%, %%Member_State%% %%Member_PostalCode%%.<br>
+        <a href="%%profile_center_url%%" alias="Profile center" style="color:#9ca3af;">Update preferences</a> ·
+        <a href="%%unsub_center_url%%" alias="Unsubscribe" style="color:#9ca3af;">Unsubscribe</a> ·
+        <a href="%%view_email_url%%" alias="View online" style="color:#9ca3af;">View online</a>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>
