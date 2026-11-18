@@ -1,0 +1,131 @@
+# Generated from: "All those customers who have completed test drives but did not make any order or contacted
+# any dealer, create a campaign for them encouraging for an order with a promotional offer on couple of vehicles"
+campaign:
+  name: "Test-Drive to Order: Volt X & Pulse Offer"
+  code: TDCONVERT
+  objective: >
+    Convert customers who completed a test drive but have not ordered or contacted a dealer since,
+    with a time-limited offer on the two most test-driven models: Volt X and Pulse.
+  brand:
+    name: AURORA MOTORS
+    primary_color: "#0B3D91"
+    accent_color: "#00A884"
+    website: https://www.example.com/aurora
+  kpis: {open_rate: 0.35, click_rate: 0.08, orders: 25}
+
+send:
+  send_classification: Default Commercial
+
+audience:
+  update_type: Overwrite
+  de:
+    fields:
+      - {name: SubscriberKey, type: Text, length: 50, pk: true}
+      - {name: EmailAddress,  type: EmailAddress, required: true}
+      - {name: FirstName,     type: Text, length: 50}
+      - {name: Model,         type: Text, length: 50}    # model they test-drove
+      - {name: TestDriveDate, type: Date}
+      - {name: LeadID,        type: Text, length: 20}
+      - {name: DealerID,      type: Text, length: 10}
+      - {name: DealerName,    type: Text, length: 100}  # dealer where they test-drove
+      - {name: LoyaltyTier,   type: Text, length: 20}
+      - {name: Region,        type: Text, length: 20}
+  # Most recent completed test drive per customer; no purchase on/after it; no later lead that
+  # shows dealer contact or conversion.
+  sql: |
+    SELECT x.SubscriberKey, x.EmailAddress, x.FirstName, x.Model, x.TestDriveDate, x.LeadID,
+           x.DealerID, x.DealerName, x.LoyaltyTier, x.Region
+    FROM (
+      SELECT c.SubscriberKey, c.EmailAddress, c.FirstName, l.Model, l.TestDriveDate, l.LeadID,
+             d.DealerID, d.DealerName, c.LoyaltyTier, c.Region,
+             ROW_NUMBER() OVER (PARTITION BY c.SubscriberKey ORDER BY l.TestDriveDate DESC) AS rn
+      FROM [CK_Master_Leads_TestDrives] l
+      INNER JOIN [CK_Master_Customers] c ON c.SubscriberKey = l.SubscriberKey
+      LEFT JOIN [CK_Master_Dealers] d ON d.DealerID = l.DealerID
+      WHERE c.EmailOptIn = 1
+        AND l.Status = 'TestDriven'
+        AND l.TestDriveDate IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM [CK_Master_Purchases] p
+                        WHERE p.SubscriberKey = l.SubscriberKey AND p.PurchaseDate >= l.TestDriveDate)
+        AND NOT EXISTS (SELECT 1 FROM [CK_Master_Leads_TestDrives] l2
+                        WHERE l2.SubscriberKey = l.SubscriberKey
+                          AND l2.Status IN ('Contacted', 'Converted')
+                          AND l2.CreatedDate >= l.TestDriveDate)
+    ) x
+    WHERE x.rn = 1
+
+emails:
+  - ref: offer
+    name: "TD Convert: Test-Drive Bonus"
+    subject: "%%=v(@FirstName)=%%, your test drive unlocked a $2,500 bonus"
+    preheader: "Order a Volt X or Pulse this month and we'll take $2,500 off. Your dealer has the details."
+    template: offer_card.html
+    blocks:
+      headline: "Liked the drive? Make it yours."
+      body: >
+        Thanks for taking the %%=v(@Model)=%% for a spin. To help you decide, order a Volt X or Pulse
+        in the next 30 days and get a $2,500 test-drive bonus, on top of current finance rates.
+      offer_value: "$2,500 OFF"
+      offer_description: "Test-drive bonus on a new Volt X or Pulse"
+      offer_code: "DRIVE2500"
+      offer_expiry: "in 30 days"
+      cta_text: "Build my order"
+      cta_url: https://www.example.com/aurora/order?offer=DRIVE2500
+      cta_alias: "Build order"
+      terms: "Sample offer for demonstration. Valid on new Volt X and Pulse orders only; one per customer."
+  - ref: resend
+    name: "TD Convert: Bonus Reminder"
+    subject: "Your $2,500 Volt X & Pulse bonus is waiting"
+    preheader: "The test-drive bonus you earned is still available. It takes minutes to start an order."
+    template: offer_card.html
+    blocks:
+      headline: "Your test-drive bonus is still here."
+      body: >
+        Pick up where you left off at %%=v(@DealerName)=%%. Your $2,500 bonus applies to a new
+        Volt X or Pulse. Start an order online and we'll hold it for you.
+      offer_value: "$2,500 OFF"
+      offer_description: "Test-drive bonus on a new Volt X or Pulse"
+      offer_code: "DRIVE2500"
+      offer_expiry: "in 26 days"
+      cta_text: "Claim my bonus"
+      cta_url: https://www.example.com/aurora/order?offer=DRIVE2500&src=resend
+      cta_alias: "Claim bonus resend"
+      terms: "Sample offer for demonstration. Valid on new Volt X and Pulse orders only; one per customer."
+  - ref: dealer_nudge
+    name: "TD Convert: Talk to Your Dealer"
+    subject: "Questions about Volt X or Pulse? Your dealer can help"
+    preheader: "Get a personal quote with your $2,500 bonus applied. No obligation."
+    template: offer_card.html
+    blocks:
+      headline: "Let's get you a personal quote."
+      body: >
+        You opened your bonus offer. Want the numbers for your situation? The team at
+        %%=v(@DealerName)=%% will price a Volt X or Pulse with your $2,500 bonus and your trade-in.
+      offer_value: "$2,500 OFF"
+      offer_description: "Applied to your personal quote"
+      offer_code: "DRIVE2500"
+      offer_expiry: "in 23 days"
+      cta_text: "Request my quote"
+      cta_url: https://www.example.com/aurora/quote?offer=DRIVE2500
+      cta_alias: "Request quote"
+      terms: "Sample offer for demonstration. Valid on new Volt X and Pulse orders only; one per customer."
+
+journey:
+  name: "CK_TDCONVERT Test-Drive to Order"
+  entry: {type: data_extension, entry_mode: SingleEntryAcrossAllVersions}
+  steps:
+    - email: offer
+    - wait: {days: 4}
+    - decision:
+        on: opened
+        email: offer
+        yes:
+          - wait: {days: 3}
+          - decision:
+              on: clicked
+              email: offer
+              yes: []                      # clicked through to build an order: leave them to the order flow
+              no:
+                - email: dealer_nudge      # opened but didn't click: offer a personal quote
+        no:
+          - email: resend                  # didn't open: resend with a new subject
